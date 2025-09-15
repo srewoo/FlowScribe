@@ -171,6 +171,10 @@ class FlowScribeUI {
         this.handleRecordingStatusChange(message);
       } else if (message.type === 'ACTIONS_UPDATED') {
         this.handleActionsUpdate(message);
+      } else if (message.type === 'REQUEST_AI_ENHANCEMENT') {
+        // Handle AI enhancement request from background script
+        this.handleAIEnhancementRequest(message.data, sendResponse);
+        return true; // Keep channel open for async response
       }
     });
   }
@@ -535,6 +539,11 @@ class FlowScribeUI {
     try {
       this.showLoading('Preparing export...');
 
+      // Validate framework is selected
+      if (!this.selectedFramework) {
+        throw new Error('No framework selected. Please select a framework first.');
+      }
+
       const options = {
         includePOM: exportType === 'pom' || exportType === 'full',
         includeCICD: exportType === 'cicd' || exportType === 'full',
@@ -552,6 +561,7 @@ class FlowScribeUI {
         type: 'GENERATE_SCRIPT',
         data: {
           sessionId: this.currentSession?.id,
+          framework: this.selectedFramework, // FIX: Pass framework at correct level
           format: 'json',
           options
         }
@@ -754,6 +764,7 @@ class FlowScribeUI {
         selectedFramework: this.selectedFramework,
         enableAI: this.enableAIToggle.checked,
         aiProvider: this.aiProvider.value,
+        aiModel: this.aiModel.value, // FIX: Added missing aiModel field
         apiKey: this.apiKey.value,
         enableSelfHealing: this.enableSelfHealing.checked,
         enableNetworkRecording: this.enableNetworkRecording.checked,
@@ -799,6 +810,46 @@ class FlowScribeUI {
       }
     } catch (error) {
       this.showToast(`Failed to reset settings: ${error.message}`, 'error');
+    }
+  }
+
+  async handleAIEnhancementRequest(data, sendResponse) {
+    try {
+      console.log('🤖 Processing AI enhancement request in popup context...');
+      
+      // Import AI service dynamically (safe in popup context)
+      const AIServiceModule = await import('../utils/ai-service.js');
+      const AIService = AIServiceModule.default || AIServiceModule.AIService;
+      
+      // Create AI service instance with skipAutoLoad to prevent storage conflicts
+      const aiService = new AIService(true);
+      
+      // Update settings with the provided configuration
+      await aiService.updateSettings({
+        provider: data.settings.aiProvider,
+        model: data.settings.aiModel,
+        apiKey: data.settings.apiKey,
+        enableAI: data.settings.enableAI
+      });
+      
+      // Check if AI is configured
+      if (!aiService.isConfigured()) {
+        throw new Error('AI service not properly configured');
+      }
+      
+      // Generate enhanced script
+      const enhancedScript = await aiService.enhanceScript(
+        data.actions, 
+        data.framework, 
+        data.options
+      );
+      
+      console.log('✅ AI enhancement completed successfully');
+      sendResponse({ success: true, enhancedScript });
+      
+    } catch (error) {
+      console.error('❌ AI enhancement failed:', error);
+      sendResponse({ success: false, error: error.message });
     }
   }
 }

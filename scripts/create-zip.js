@@ -11,6 +11,13 @@ if (!fs.existsSync(distPath)) {
   process.exit(1);
 }
 
+// Ensure the output directory exists
+const outputDir = path.dirname(outputPath);
+if (!fs.existsSync(outputDir)) {
+  fs.mkdirSync(outputDir, { recursive: true });
+  console.log('📁 Created package directory');
+}
+
 // Remove existing ZIP file if it exists
 if (fs.existsSync(outputPath)) {
   fs.unlinkSync(outputPath);

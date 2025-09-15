@@ -350,6 +350,10 @@ class SelfHealingEngine {
    */
   elementExists(selector, dom) {
     try {
+      // Service worker compatibility check
+      if (typeof document === 'undefined') {
+        return false; // Cannot check in service worker context
+      }
       return document.querySelector(selector) !== null;
     } catch {
       return false;
@@ -358,6 +362,10 @@ class SelfHealingEngine {
 
   elementExistsByXPath(xpath, dom) {
     try {
+      // Service worker compatibility check
+      if (typeof document === 'undefined') {
+        return false; // Cannot check in service worker context
+      }
       const result = document.evaluate(
         xpath, 
         document, 
@@ -373,6 +381,10 @@ class SelfHealingEngine {
 
   querySelectorAll(selector, dom) {
     try {
+      // Service worker compatibility check
+      if (typeof document === 'undefined') {
+        return []; // Cannot query in service worker context
+      }
       return document.querySelectorAll(selector);
     } catch {
       return [];

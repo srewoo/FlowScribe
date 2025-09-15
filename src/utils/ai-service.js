@@ -1,5 +1,5 @@
 class AIService {
-  constructor() {
+  constructor(skipAutoLoad = false) {
     this.providers = {
       openai: {
         name: 'OpenAI',
@@ -21,12 +21,29 @@ class AIService {
       }
     };
     
-    this.settings = {};
+    this.settings = {
+      provider: 'openai',
+      model: 'gpt-4o',
+      apiKey: '',
+      enableAI: false,
+      maxTokens: 2000,
+      temperature: 0.1
+    };
+    
+    // Only auto-load settings if not skipped (for service worker compatibility)
+    if (!skipAutoLoad) {
     this.loadSettings();
+    }
   }
 
   async loadSettings() {
     try {
+      // Service worker availability check
+      if (!chrome?.storage?.local) {
+        console.warn('Chrome storage API not available in current context');
+        throw new Error('Chrome storage API not available');
+      }
+      
       // Load from the main settings storage to maintain consistency
       const result = await chrome.storage.local.get(['flowScribeSettings']);
       const mainSettings = result.flowScribeSettings || {};
@@ -39,8 +56,10 @@ class AIService {
         maxTokens: 2000,
         temperature: 0.1
       };
+      console.log('🤖 AI settings loaded successfully');
     } catch (error) {
-      console.error('Failed to load AI settings:', error);
+      console.error('Failed to load AI settings:', error.message || error);
+      // Use default settings if storage is unavailable
       this.settings = {
         provider: 'openai',
         model: 'gpt-4o',

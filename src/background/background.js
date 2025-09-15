@@ -27,6 +27,11 @@ class FlowScribeBackground {
 
   async loadSettings() {
     try {
+      // Add service worker availability check
+      if (!chrome?.storage?.local) {
+        throw new Error('Chrome storage API not available');
+      }
+      
       const result = await chrome.storage.local.get(['flowScribeSettings']);
       this.settings = result.flowScribeSettings || {
         selectedFramework: 'playwright',
@@ -43,6 +48,7 @@ class FlowScribeBackground {
         enablePOMGeneration: true,
         cicdPlatform: 'github-actions'
       };
+      console.log('✅ Settings loaded successfully:', this.settings);
     } catch (error) {
       console.error('Failed to load settings:', error);
       this.settings = {
@@ -93,14 +99,29 @@ class FlowScribeBackground {
   }
 
   async initializeAI() {
+    // Create a mock AI service immediately to prevent null reference errors
+    this.aiService = {
+      isConfigured: () => false,
+      enhanceScript: async (actions, framework, options) => {
+        console.log('AI service unavailable - using template mode');
+        return null;
+      },
+      updateSettings: () => Promise.resolve(),
+      loadSettings: () => Promise.resolve()
+    };
+
     try {
-      // Dynamically import AI service
-      const AIServiceModule = await import('../utils/ai-service.js');
-      const AIService = AIServiceModule.default || AIServiceModule.AIService;
-      this.aiService = new AIService();
+      // Skip AI initialization in service worker context for now
+      // This prevents DOM-related errors during webpack module resolution
+      console.log('🤖 AI service: Using template mode (service worker context)');
+      return;
+      
+      // TODO: Implement AI service in a worker-compatible way
+      // The current implementation has DOM dependencies in the dependency chain
+      // that cause issues in the service worker context even with dynamic imports
+      
     } catch (error) {
-      console.warn('AI service not available:', error);
-      this.aiService = null;
+      console.warn('AI service initialization error:', error.message || error);
     }
   }
 
@@ -199,7 +220,8 @@ class FlowScribeBackground {
           return true;
 
         case 'ENHANCE_SCRIPT':
-          this.enhanceScript(message.framework, message.actions, message.options)
+          // Delegate AI enhancement to popup context
+          this.requestAIEnhancement(message.framework, message.actions, message.options)
             .then(script => sendResponse({ success: true, script }))
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true;
@@ -435,21 +457,22 @@ class FlowScribeBackground {
   }
 
   async generateScript(framework, actions, options = {}) {
-    // Use AI enhancement if available and enabled
-    if (this.settings.enableAI && this.aiService && this.aiService.isConfigured()) {
+    // Try AI enhancement if enabled and configured
+    if (this.settings.enableAI && this.settings.apiKey && options.useAI !== false) {
       try {
-        return await this.aiService.enhanceScript(actions, framework, {
-          includeAssertions: options.includeAssertions ?? this.settings.includeAssertions,
-          includeScreenshots: options.includeScreenshots ?? this.settings.includeScreenshots,
-          addComments: options.addComments ?? this.settings.addComments,
-          ...options
-        });
+        console.log('🤖 Requesting AI enhancement from popup context...');
+        const enhancedScript = await this.requestAIEnhancement(framework, actions, options);
+        if (enhancedScript) {
+          console.log('✅ AI enhancement successful');
+          return enhancedScript;
+        }
       } catch (error) {
-        console.warn('AI enhancement failed, falling back to template:', error);
+        console.warn('🔄 AI enhancement failed, falling back to template:', error.message);
       }
     }
 
     // Fallback to template generation
+    console.log('📝 Using template generation');
     const generators = {
       playwright: this.generatePlaywrightScript,
       selenium: this.generateSeleniumScript,
@@ -465,17 +488,45 @@ class FlowScribeBackground {
     return generator.call(this, actions);
   }
 
-  async enhanceScript(framework, actions, options = {}) {
-    if (!this.aiService) {
-      throw new Error('AI service not available');
-    }
-
-    return await this.aiService.enhanceScript(actions, framework, {
-      ...options,
-      includeAssertions: options.includeAssertions ?? this.settings.includeAssertions,
-      includeScreenshots: options.includeScreenshots ?? this.settings.includeScreenshots,
-      addComments: options.addComments ?? this.settings.addComments
+  async requestAIEnhancement(framework, actions, options = {}) {
+    // Request AI enhancement from popup context via message passing
+    return new Promise((resolve, reject) => {
+      // Try to find an active popup window or create a communication channel
+      chrome.runtime.sendMessage({
+        type: 'REQUEST_AI_ENHANCEMENT',
+        data: {
+          framework,
+          actions,
+          options: {
+            includeAssertions: options.includeAssertions ?? this.settings.includeAssertions,
+            includeScreenshots: options.includeScreenshots ?? this.settings.includeScreenshots,
+            addComments: options.addComments ?? this.settings.addComments,
+            ...options
+          },
+          settings: {
+            enableAI: this.settings.enableAI,
+            aiProvider: this.settings.aiProvider,
+            aiModel: this.settings.aiModel,
+            apiKey: this.settings.apiKey
+          }
+        }
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          // No popup context available, fallback to template
+          console.log('No popup context available for AI enhancement');
+          resolve(null);
+        } else if (response && response.success) {
+          resolve(response.enhancedScript);
+        } else {
+          reject(new Error(response?.error || 'AI enhancement failed'));
+        }
+      });
     });
+  }
+
+  async enhanceScript(framework, actions, options = {}) {
+    // Deprecated: Use requestAIEnhancement instead
+    throw new Error('AI service moved to popup context - use requestAIEnhancement');
   }
 
   async updateSettings(newSettings) {
