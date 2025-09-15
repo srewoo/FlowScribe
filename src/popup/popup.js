@@ -11,6 +11,29 @@ class FlowScribeUI {
     this.selectedFramework = 'playwright';
     this.settings = {};
     this.recordingStartTime = null;
+    
+    // Model options for different providers
+    this.modelOptions = {
+      openai: [
+        { value: 'gpt-4o', label: 'GPT-4o (Latest)' },
+        { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' },
+        { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+        { value: 'gpt-4', label: 'GPT-4' },
+        { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo' }
+      ],
+      anthropic: [
+        { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (Latest)' },
+        { value: 'claude-3-5-sonnet-20240620', label: 'Claude 3.5 Sonnet' },
+        { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
+        { value: 'claude-3-sonnet-20240229', label: 'Claude 3 Sonnet' },
+        { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku (Fast)' }
+      ],
+      google: [
+        { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+        { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (Fast)' },
+        { value: 'gemini-pro', label: 'Gemini Pro' }
+      ]
+    };
     this.durationTimer = null;
     this.currentTab = 'recording';
     this.history = [];
@@ -65,6 +88,7 @@ class FlowScribeUI {
     this.enableAIToggle = document.getElementById('enableAIToggle');
     this.aiConfig = document.getElementById('aiConfig');
     this.aiProvider = document.getElementById('aiProvider');
+    this.aiModel = document.getElementById('aiModel');
     this.apiKey = document.getElementById('apiKey');
     this.cicdPlatform = document.getElementById('cicdPlatform');
 
@@ -106,6 +130,12 @@ class FlowScribeUI {
 
     // AI toggle
     this.enableAIToggle.addEventListener('change', () => this.toggleAIConfig());
+    
+    // AI provider change - update model options
+    this.aiProvider.addEventListener('change', () => this.updateModelOptions());
+    
+    // AI model change - save preference
+    this.aiModel.addEventListener('change', () => this.saveModelPreference());
 
     // Script modal
     this.closeScriptBtn.addEventListener('click', () => this.closeScriptModal());
@@ -171,6 +201,7 @@ class FlowScribeUI {
       selectedFramework: 'playwright',
       enableAI: false,
       aiProvider: 'openai',
+      aiModel: 'gpt-4o',
       apiKey: '',
       enableSelfHealing: true,
       enableNetworkRecording: true,
@@ -194,6 +225,12 @@ class FlowScribeUI {
     if (this.aiProvider) this.aiProvider.value = this.settings.aiProvider || 'openai';
     if (this.apiKey) this.apiKey.value = this.settings.apiKey || ''; // FIX: Set API key field
     if (this.cicdPlatform) this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
+
+    // Update model options and set selected model
+    this.updateModelOptions();
+    if (this.aiModel && this.settings.aiModel) {
+      this.aiModel.value = this.settings.aiModel;
+    }
 
     // Toggle AI config visibility
     this.toggleAIConfig();
@@ -574,6 +611,43 @@ class FlowScribeUI {
   toggleAIConfig() {
     const isEnabled = this.enableAIToggle.checked;
     this.aiConfig.style.display = isEnabled ? 'block' : 'none';
+    
+    // Initialize model options when AI is first enabled
+    if (isEnabled && this.aiModel.options.length <= 1) {
+      this.updateModelOptions();
+    }
+  }
+
+  updateModelOptions() {
+    const provider = this.aiProvider.value;
+    const models = this.modelOptions[provider] || [];
+    
+    // Clear existing options
+    this.aiModel.innerHTML = '';
+    
+    // Add new options
+    models.forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.value;
+      option.textContent = model.label;
+      this.aiModel.appendChild(option);
+    });
+    
+    // Set default model if none selected
+    if (models.length > 0 && !this.settings.aiModel) {
+      this.aiModel.value = models[0].value;
+    } else if (this.settings.aiModel) {
+      this.aiModel.value = this.settings.aiModel;
+    }
+  }
+
+  saveModelPreference() {
+    // Save the model preference immediately when changed
+    this.settings.aiModel = this.aiModel.value;
+    chrome.runtime.sendMessage({
+      type: 'UPDATE_SETTINGS',
+      settings: { aiModel: this.aiModel.value }
+    });
   }
 
   async saveSettings() {
@@ -581,6 +655,7 @@ class FlowScribeUI {
       selectedFramework: this.selectedFramework,
       enableAI: this.enableAIToggle.checked,
       aiProvider: this.aiProvider.value,
+      aiModel: this.aiModel.value,
       apiKey: this.apiKey.value,
       enableSelfHealing: this.enableSelfHealing.checked,
       enableNetworkRecording: this.enableNetworkRecording.checked,

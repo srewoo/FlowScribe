@@ -33,7 +33,7 @@ class AIService {
       
       this.settings = {
         provider: mainSettings.aiProvider || 'openai',
-        model: 'gpt-4o-mini',
+        model: mainSettings.aiModel || 'gpt-4o',
         apiKey: mainSettings.apiKey || '',
         enableAI: mainSettings.enableAI || false,
         maxTokens: 2000,
@@ -43,7 +43,7 @@ class AIService {
       console.error('Failed to load AI settings:', error);
       this.settings = {
         provider: 'openai',
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
         apiKey: '',
         enableAI: false,
         maxTokens: 2000,
@@ -62,6 +62,7 @@ class AIService {
     this.settings = {
       ...this.settings,
       provider: newSettings.provider || this.settings.provider,
+      model: newSettings.model || newSettings.aiModel || this.settings.model,
       apiKey: newSettings.apiKey || this.settings.apiKey,
       enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
     };

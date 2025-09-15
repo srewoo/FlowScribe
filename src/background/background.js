@@ -32,6 +32,7 @@ class FlowScribeBackground {
         selectedFramework: 'playwright',
         enableAI: false,
         aiProvider: 'openai',
+        aiModel: 'gpt-4o',
         apiKey: '',
         includeScreenshots: true,
         includeAssertions: true,
@@ -48,6 +49,7 @@ class FlowScribeBackground {
         selectedFramework: 'playwright',
         enableAI: false,
         aiProvider: 'openai',
+        aiModel: 'gpt-4o',
         apiKey: '',
         includeScreenshots: true,
         includeAssertions: true,
@@ -488,6 +490,7 @@ class FlowScribeBackground {
       if (this.aiService) {
         await this.aiService.updateSettings({
           provider: newSettings.aiProvider || this.settings.aiProvider,
+          model: newSettings.aiModel || this.settings.aiModel,
           apiKey: newSettings.apiKey || this.settings.apiKey,
           enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
         });

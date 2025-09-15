@@ -133,9 +133,16 @@
                             <div class="form-group">
                                 <label>AI Provider:</label>
                                 <select id="aiProvider">
-                                    <option value="openai">OpenAI (GPT-4)</option>
-                                    <option value="anthropic">Anthropic (Claude)</option>
-                                    <option value="google">Google AI (Gemini)</option>
+                                    <option value="openai">OpenAI</option>
+                                    <option value="anthropic">Anthropic</option>
+                                    <option value="google">Google AI</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Model:</label>
+                                <select id="aiModel">
+                                    <!-- Options will be populated dynamically based on provider -->
+                                    <option value="gpt-4o">GPT-4o</option>
                                 </select>
                             </div>
                             <div class="form-group">
