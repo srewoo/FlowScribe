@@ -190,9 +190,9 @@ test-page.html       # Test page for trying FlowScribe
 
 ## 🐛 Issues & Support
 
-- **Bug Reports**: [GitHub Issues](https://github.com/your-org/flowscribe/issues)
-- **Feature Requests**: [GitHub Discussions](https://github.com/your-org/flowscribe/discussions)
-- **Support**: support@flowscribe.com
+- **Bug Reports**: [GitHub Issues](https://github.com/srewoo/FlowScribe/issues)
+- **Feature Requests**: [GitHub Discussions](https://github.com/srewoo/FlowScribe/discussions)
+- **Support**: srewoo@gmail.com
 
 ## 📄 License
 

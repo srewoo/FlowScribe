@@ -19,7 +19,20 @@
     "cypress",
     "chrome-extension"
   ],
-  "author": "FlowScribe Team",
+  "author": {
+    "name": "FlowScribe Team",
+    "email": "srewoo@gmail.com",
+    "url": "https://github.com/srewoo/FlowScribe"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/srewoo/FlowScribe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/srewoo/FlowScribe/issues",
+    "email": "srewoo@gmail.com"
+  },
+  "homepage": "https://github.com/srewoo/FlowScribe#readme",
   "license": "MIT",
   "devDependencies": {
     "@babel/core": "^7.22.0",
