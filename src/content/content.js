@@ -469,9 +469,65 @@ class FlowScribeRecorder {
     if (this.shouldSkipElement(target)) return;
 
     const action = this.createAction(event, target);
-    this.actions.push(action);
+    const enhancedAction = this.enhanceActionDetection(action, target, event);
+    
+    // Apply action deduplication and optimization
+    const optimizedAction = this.optimizeAction(enhancedAction);
+    if (!optimizedAction) return; // Action was filtered out
+    
+    this.actions.push(optimizedAction);
 
-    console.log('Action recorded:', action);
+    console.log('Action recorded:', optimizedAction);
+  }
+
+  optimizeAction(action) {
+    // Deduplication and optimization logic
+    const lastAction = this.actions[this.actions.length - 1];
+    
+    // Skip rapid duplicate clicks
+    if (action.type === 'click' && lastAction?.type === 'click' && 
+        this.isSameElement(action.element, lastAction.element) &&
+        (action.timestamp - lastAction.timestamp) < 300) {
+      return null; // Skip this duplicate click
+    }
+    
+    // Optimize input actions - replace multiple fills with final value
+    if ((action.type === 'input' || action.type === 'change') && 
+        lastAction && (lastAction.type === 'input' || lastAction.type === 'change') &&
+        this.isSameElement(action.element, lastAction.element)) {
+      
+      // Replace the last action instead of adding a new one
+      this.actions[this.actions.length - 1] = {
+        ...lastAction,
+        value: action.value,
+        timestamp: action.timestamp
+      };
+      return null; // Don't add new action
+    }
+    
+    // Skip redundant focus/blur events if they don't add value
+    if ((action.type === 'focus' || action.type === 'blur') && 
+        lastAction && this.isSameElement(action.element, lastAction.element)) {
+      return null;
+    }
+    
+    return action;
+  }
+
+  isSameElement(element1, element2) {
+    if (!element1 || !element2) return false;
+    
+    // Compare by best available identifier
+    if (element1.id && element2.id) {
+      return element1.id === element2.id;
+    }
+    
+    if (element1.name && element2.name && element1.tagName === element2.tagName) {
+      return element1.name === element2.name;
+    }
+    
+    // Fallback to CSS selector comparison
+    return element1.cssSelector === element2.cssSelector;
   }
 
   recordIframeAction(data) {
@@ -562,26 +618,152 @@ class FlowScribeRecorder {
   generateCSSSelector(element) {
     if (!element) return '';
     
-    if (element.id) {
+    // Try to find the most stable selector
+    const bestSelector = this.generateBestSelector(element);
+    if (bestSelector) return bestSelector;
+    
+    // Fallback to smart CSS path generation (shorter and more stable)
+    return this.generateSmartCSSPath(element);
+  }
+
+  generateBestSelector(element) {
+    // Priority 1: ID (if not dynamic)
+    if (element.id && !this.isDynamicValue(element.id)) {
       return `#${element.id}`;
     }
-    
-    let path = '';
-    for (; element && element.nodeType === 1; element = element.parentNode) {
-      let selector = element.tagName.toLowerCase();
-      if (element.className) {
-        const classes = element.className.trim().split(/\s+/).filter(cls => cls);
-        if (classes.length > 0) {
-          selector += '.' + classes.join('.');
-        }
-      }
-      path = path ? `${selector} > ${path}` : selector;
-      if (element.id) {
-        path = `#${element.id} > ${path}`;
-        break;
+
+    // Priority 2: Test attributes
+    const testAttributes = ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-automation'];
+    for (const attr of testAttributes) {
+      const value = element.getAttribute(attr);
+      if (value && !this.isDynamicValue(value)) {
+        return `[${attr}="${value}"]`;
       }
     }
-    return path;
+
+    // Priority 3: Name attribute for form elements
+    if (element.name && ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(element.tagName)) {
+      return `[name="${element.name}"]`;
+    }
+
+    // Priority 4: Type + placeholder for inputs
+    if (element.tagName === 'INPUT' && element.type && element.placeholder) {
+      return `input[type="${element.type}"][placeholder="${element.placeholder}"]`;
+    }
+
+    // Priority 5: Role + accessible name
+    const role = element.getAttribute('role') || this.getImplicitRole(element);
+    const accessibleName = this.getAccessibleName(element);
+    if (role && accessibleName && !this.isDynamicValue(accessibleName)) {
+      return `[role="${role}"][aria-label="${accessibleName}"]`;
+    }
+
+    // Priority 6: Stable class names (avoid generated ones)
+    const stableClasses = this.getStableClasses(element);
+    if (stableClasses.length > 0) {
+      return `${element.tagName.toLowerCase()}.${stableClasses.join('.')}`;
+    }
+
+    return null; // No good selector found, use fallback
+  }
+
+  generateSmartCSSPath(element) {
+    const path = [];
+    let current = element;
+    
+    while (current && current.nodeType === 1) {
+      let selector = current.tagName.toLowerCase();
+      
+      // Add stable attributes to make selector more unique
+      if (current.id && !this.isDynamicValue(current.id)) {
+        return `#${current.id}` + (path.length > 0 ? ` ${path.join(' ')}` : '');
+      }
+      
+      // Add stable classes
+      const stableClasses = this.getStableClasses(current);
+      if (stableClasses.length > 0) {
+        selector += `.${stableClasses.slice(0, 2).join('.')}`; // Limit to 2 classes max
+      }
+      
+      // Add nth-child only if necessary for uniqueness
+      const siblings = Array.from(current.parentNode?.children || [])
+        .filter(el => el.tagName === current.tagName);
+      if (siblings.length > 1) {
+        const index = siblings.indexOf(current) + 1;
+        selector += `:nth-child(${index})`;
+      }
+      
+      path.unshift(selector);
+      
+      // Stop traversing up if we have a unique enough selector
+      if (path.length >= 3) break;
+      
+      current = current.parentNode;
+    }
+    
+    return path.join(' > ');
+  }
+
+  isDynamicValue(value) {
+    // Check if value looks dynamically generated
+    const dynamicPatterns = [
+      /^[0-9a-f]{8,}$/i,           // Long hex strings
+      /^\d{10,}$/,                 // Long numbers (timestamps)
+      /^[a-z0-9]{20,}$/i,          // Long random strings
+      /^uuid-/i,                   // UUID patterns
+      /^temp-/i,                   // Temporary IDs
+      /^generated-/i,              // Generated IDs
+      /-([\d]+)$/,                 // Ending with numbers
+    ];
+    
+    return dynamicPatterns.some(pattern => pattern.test(value));
+  }
+
+  getStableClasses(element) {
+    if (!element.className) return [];
+    
+    const classes = element.className.trim().split(/\s+/).filter(cls => cls);
+    const unstablePatterns = [
+      /^[a-z0-9]{6,}$/i,          // Generated class names (CSS modules)
+      /^style__/i,                // Styled components
+      /^css-[a-z0-9]+$/i,         // CSS-in-JS
+      /^sc-[a-z0-9]+$/i,          // Styled components
+      /^ant-\d/,                  // Ant Design with numbers
+      /makeStyles/i,              // Material-UI
+    ];
+    
+    return classes.filter(cls => 
+      !unstablePatterns.some(pattern => pattern.test(cls)) &&
+      cls.length < 50 // Avoid very long class names
+    );
+  }
+
+  getImplicitRole(element) {
+    const tagRoleMap = {
+      'BUTTON': 'button',
+      'A': 'link',
+      'INPUT': element.type === 'button' || element.type === 'submit' ? 'button' : 'textbox',
+      'TEXTAREA': 'textbox',
+      'SELECT': 'combobox',
+      'H1': 'heading',
+      'H2': 'heading',
+      'H3': 'heading',
+      'H4': 'heading',
+      'H5': 'heading',
+      'H6': 'heading'
+    };
+    
+    return tagRoleMap[element.tagName] || null;
+  }
+
+  getAccessibleName(element) {
+    // Try different ways to get accessible name
+    return element.getAttribute('aria-label') ||
+           element.getAttribute('aria-labelledby') ||
+           element.getAttribute('title') ||
+           element.getAttribute('alt') ||
+           (element.textContent && element.textContent.trim().substring(0, 50)) ||
+           element.getAttribute('placeholder');
   }
 
   showRecordingIndicator() {

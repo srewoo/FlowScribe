@@ -584,69 +584,187 @@ class FlowScribeBackground {
   }
 
   generatePlaywrightScript(actions) {
+    // Pre-process actions to optimize and add context
+    const optimizedActions = this.optimizeActionsForScript(actions);
+    const testContext = this.analyzeTestContext(optimizedActions);
+    
     const lines = [
       `import { test, expect } from '@playwright/test';`,
       ``,
-      `test('FlowScribe recorded test', async ({ page }) => {`,
+      `test('${testContext.testName}', async ({ page }) => {`,
     ];
 
+    // Add page setup if needed
+    if (testContext.requiresAuth) {
+      lines.push(`  // Setup: Configure authentication if needed`);
+    }
+    
     let currentUrl = '';
+    let stepCounter = 1;
 
-    actions.forEach(action => {
+    optimizedActions.forEach((action, index) => {
+      // Navigation handling with assertions
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
+        lines.push(`  // Step ${stepCounter++}: Navigate to ${action.url}`);
         lines.push(`  await page.goto('${action.url}');`);
+        lines.push(`  await expect(page).toHaveURL(/${this.getUrlPattern(action.url)}/);`);
         currentUrl = action.url;
       }
 
+      const selector = this.getBestSelector(action.element);
+      const elementDesc = this.getElementDescription(action.element);
+      
       switch (action.type) {
         case 'click':
-          const clickSelector = this.getBestSelector(action.element);
+          lines.push(`  // Step ${stepCounter++}: Click ${elementDesc}`);
           if (action.iframeInfo) {
             lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`  await frame.locator('${clickSelector}').click();`);
+            lines.push(`  await frame.locator('${selector}').click();`);
           } else {
-            lines.push(`  await page.locator('${clickSelector}').click();`);
+            lines.push(`  await expect(page.locator('${selector}')).toBeVisible();`);
+            lines.push(`  await page.locator('${selector}').click();`);
+          }
+          
+          // Add post-click assertions for important elements
+          if (this.isImportantClick(action)) {
+            lines.push(`  // Verify click action was successful`);
+            if (action.element.textContent?.toLowerCase().includes('submit')) {
+              lines.push(`  await page.waitForLoadState('networkidle');`);
+            }
           }
           break;
 
         case 'input':
         case 'change':
-          const inputSelector = this.getBestSelector(action.element);
           const value = action.value || '';
+          lines.push(`  // Step ${stepCounter++}: Enter "${value}" in ${elementDesc}`);
+          
           if (action.iframeInfo) {
             lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`  await frame.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+            lines.push(`  await frame.locator('${selector}').fill('${this.escapeValue(value)}');`);
           } else {
-            lines.push(`  await page.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+            lines.push(`  await expect(page.locator('${selector}')).toBeVisible();`);
+            lines.push(`  await page.locator('${selector}').clear();`);
+            lines.push(`  await page.locator('${selector}').fill('${this.escapeValue(value)}');`);
+            
+            // Add validation for important inputs
+            if (value && action.element.type !== 'password') {
+              lines.push(`  await expect(page.locator('${selector}')).toHaveValue('${this.escapeValue(value)}');`);
+            }
           }
           break;
 
         case 'keydown':
           if (action.key === 'Enter') {
-            const enterSelector = this.getBestSelector(action.element);
+            lines.push(`  // Step ${stepCounter++}: Press Enter`);
             if (action.iframeInfo) {
               lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-              lines.push(`  await frame.locator('${enterSelector}').press('Enter');`);
+              lines.push(`  await frame.locator('${selector}').press('Enter');`);
             } else {
-              lines.push(`  await page.locator('${enterSelector}').press('Enter');`);
+              lines.push(`  await page.locator('${selector}').press('Enter');`);
+              lines.push(`  await page.waitForLoadState('networkidle');`);
             }
           }
           break;
 
         case 'submit':
-          const formSelector = this.getBestSelector(action.element);
+          lines.push(`  // Step ${stepCounter++}: Submit form`);
           if (action.iframeInfo) {
             lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`  await frame.locator('${formSelector}').press('Enter');`);
+            lines.push(`  await frame.locator('${selector}').press('Enter');`);
           } else {
-            lines.push(`  await page.locator('${formSelector}').press('Enter');`);
+            lines.push(`  await page.locator('${selector}').click();`);
+            lines.push(`  await page.waitForLoadState('networkidle');`);
           }
           break;
       }
     });
 
+    // Add final assertions
+    const finalUrl = optimizedActions[optimizedActions.length - 1]?.url;
+    if (finalUrl && finalUrl !== testContext.startUrl) {
+      lines.push(`  // Verify final page state`);
+      lines.push(`  await expect(page).toHaveURL(/${this.getUrlPattern(finalUrl)}/);`);
+    }
+
     lines.push(`});`);
     return lines.join('\n');
+  }
+
+  optimizeActionsForScript(actions) {
+    const optimized = [];
+    let lastAction = null;
+    
+    for (const action of actions) {
+      // Skip duplicate actions that were already filtered
+      if (lastAction && this.isDuplicateAction(action, lastAction)) {
+        continue;
+      }
+      
+      optimized.push(action);
+      lastAction = action;
+    }
+    
+    return optimized;
+  }
+
+  isDuplicateAction(action1, action2) {
+    if (action1.type !== action2.type) return false;
+    
+    // Same element and type within short time
+    if (this.isSameElementData(action1.element, action2.element) &&
+        Math.abs(action1.timestamp - action2.timestamp) < 500) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  isSameElementData(el1, el2) {
+    if (!el1 || !el2) return false;
+    return el1.id === el2.id || 
+           (el1.name === el2.name && el1.tagName === el2.tagName) ||
+           el1.cssSelector === el2.cssSelector;
+  }
+
+  analyzeTestContext(actions) {
+    const urls = [...new Set(actions.map(a => a.url).filter(Boolean))];
+    const hasPasswordField = actions.some(a => a.element?.type === 'password');
+    const hasSubmit = actions.some(a => a.type === 'submit' || 
+      (a.type === 'click' && a.element?.textContent?.toLowerCase().includes('submit')));
+    
+    return {
+      testName: `FlowScribe User Journey - ${new Date().toISOString().slice(0, 10)}`,
+      startUrl: urls[0] || 'unknown',
+      endUrl: urls[urls.length - 1] || urls[0],
+      pageCount: urls.length,
+      requiresAuth: hasPasswordField,
+      hasFormSubmission: hasSubmit
+    };
+  }
+
+  getUrlPattern(url) {
+    try {
+      const urlObj = new URL(url);
+      // Create a regex pattern that's flexible for dynamic parts
+      return urlObj.pathname.replace(/\/\d+/g, '/\\d+') + '.*';
+    } catch {
+      return url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // Escape special chars
+    }
+  }
+
+  isImportantClick(action) {
+    const element = action.element;
+    const importantPatterns = [
+      /submit/i, /login/i, /register/i, /save/i, /confirm/i, /continue/i, /next/i
+    ];
+    
+    const text = element.textContent || element.value || '';
+    return importantPatterns.some(pattern => pattern.test(text));
+  }
+
+  escapeValue(value) {
+    return value.replace(/'/g, "\\'").replace(/"/g, '\\"');
   }
 
   generateSeleniumScript(actions) {
@@ -797,33 +915,88 @@ class FlowScribeBackground {
   }
 
   getBestSelector(element) {
-    // Priority: id > data-testid > name > specific class > CSS selector > xpath
-    if (element.id) {
+    if (!element) return 'unknown';
+    
+    // Priority 1: ID (if not dynamic-looking)
+    if (element.id && !this.isDynamicValue(element.id)) {
       return `#${element.id}`;
     }
     
-    // Check for common test attributes
-    const testAttributes = ['data-testid', 'data-test', 'data-cy'];
-    for (const attr of testAttributes) {
-      // This is a simplified check - in real implementation, we'd need the actual attribute values
-      if (element.className && element.className.includes('test')) {
-        break;
+    // Priority 2: Test attributes from enhanced action data
+    if (element.testAttributes && Object.keys(element.testAttributes).length > 0) {
+      const firstTestAttr = Object.entries(element.testAttributes)[0];
+      return `[${firstTestAttr[0]}="${firstTestAttr[1]}"]`;
+    }
+    
+    // Priority 3: Test attributes from regular attributes
+    const testAttributes = ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-automation'];
+    if (element.attributes) {
+      for (const attr of testAttributes) {
+        const value = element.attributes[attr];
+        if (value && !this.isDynamicValue(value)) {
+          return `[${attr}="${value}"]`;
+        }
       }
     }
     
-    if (element.name && element.tagName && ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName)) {
+    // Priority 4: Name attribute for form elements
+    if (element.name && element.tagName && ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(element.tagName)) {
       return `[name="${element.name}"]`;
     }
     
-    if (element.cssSelector) {
+    // Priority 5: Type + placeholder for inputs
+    if (element.tagName === 'INPUT' && element.type && element.placeholder) {
+      return `input[type="${element.type}"][placeholder="${element.placeholder}"]`;
+    }
+    
+    // Priority 6: aria-label for accessibility
+    if (element.attributes && element.attributes['aria-label'] && !this.isDynamicValue(element.attributes['aria-label'])) {
+      return `[aria-label="${element.attributes['aria-label']}"]`;
+    }
+    
+    // Priority 7: Stable classes from enhanced data
+    if (element.semanticAttributes && element.semanticAttributes.stableClasses?.length > 0) {
+      const stableClasses = element.semanticAttributes.stableClasses.slice(0, 2); // Max 2 classes
+      return `${element.tagName.toLowerCase()}.${stableClasses.join('.')}`;
+    }
+    
+    // Priority 8: Use improved CSS selector if available
+    if (element.cssSelector && !element.cssSelector.includes('nth-child')) {
       return element.cssSelector;
     }
     
+    // Priority 9: Text content for buttons/links (if short and stable)
+    if (['BUTTON', 'A'].includes(element.tagName) && element.textContent && 
+        element.textContent.length < 30 && !this.isDynamicValue(element.textContent)) {
+      return `${element.tagName.toLowerCase()}:has-text("${element.textContent.trim()}")`;
+    }
+    
+    // Fallback: Use XPath if CSS selector is too brittle
     if (element.xpath) {
       return element.xpath;
     }
     
-    return element.tagName.toLowerCase();
+    // Last resort
+    return element.tagName?.toLowerCase() || 'unknown';
+  }
+
+  isDynamicValue(value) {
+    if (!value || typeof value !== 'string') return true;
+    
+    // Check if value looks dynamically generated
+    const dynamicPatterns = [
+      /^[0-9a-f]{8,}$/i,           // Long hex strings
+      /^\d{10,}$/,                 // Long numbers (timestamps)
+      /^[a-z0-9]{20,}$/i,          // Long random strings
+      /^uuid-/i,                   // UUID patterns
+      /^temp-/i,                   // Temporary IDs
+      /^generated-/i,              // Generated IDs
+      /-([\d]+)$/,                 // Ending with numbers
+      /^css-[a-z0-9]+$/i,          // CSS-in-JS classes
+      /^sc-[a-z0-9]+$/i,           // Styled components
+    ];
+    
+    return dynamicPatterns.some(pattern => pattern.test(value));
   }
 
   getBestSelectorForSelenium(element) {
