@@ -171,6 +171,7 @@ class FlowScribeUI {
       selectedFramework: 'playwright',
       enableAI: false,
       aiProvider: 'openai',
+      apiKey: '',
       enableSelfHealing: true,
       enableNetworkRecording: true,
       enablePOMGeneration: true,
@@ -191,6 +192,7 @@ class FlowScribeUI {
     // Apply AI settings
     if (this.enableAIToggle) this.enableAIToggle.checked = this.settings.enableAI || false;
     if (this.aiProvider) this.aiProvider.value = this.settings.aiProvider || 'openai';
+    if (this.apiKey) this.apiKey.value = this.settings.apiKey || ''; // FIX: Set API key field
     if (this.cicdPlatform) this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
 
     // Toggle AI config visibility

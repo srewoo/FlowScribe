@@ -27,12 +27,15 @@ class AIService {
 
   async loadSettings() {
     try {
-      const result = await chrome.storage.local.get(['aiSettings']);
-      this.settings = result.aiSettings || {
-        provider: 'openai',
+      // Load from the main settings storage to maintain consistency
+      const result = await chrome.storage.local.get(['flowScribeSettings']);
+      const mainSettings = result.flowScribeSettings || {};
+      
+      this.settings = {
+        provider: mainSettings.aiProvider || 'openai',
         model: 'gpt-4o-mini',
-        apiKey: '',
-        enableAI: false,
+        apiKey: mainSettings.apiKey || '',
+        enableAI: mainSettings.enableAI || false,
         maxTokens: 2000,
         temperature: 0.1
       };
@@ -51,7 +54,18 @@ class AIService {
 
   async saveSettings(newSettings) {
     this.settings = { ...this.settings, ...newSettings };
-    await chrome.storage.local.set({ aiSettings: this.settings });
+    // Don't save to separate aiSettings - let background script handle main storage
+  }
+
+  async updateSettings(newSettings) {
+    // Update AI-specific settings when called from background script
+    this.settings = {
+      ...this.settings,
+      provider: newSettings.provider || this.settings.provider,
+      apiKey: newSettings.apiKey || this.settings.apiKey,
+      enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
+    };
+    console.log('🤖 AI Service settings updated:', this.settings);
   }
 
   isConfigured() {

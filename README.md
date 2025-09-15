@@ -1,7 +1,5 @@
 # FlowScribe - AI-Powered Test Automation Recorder
 
-**Consolidated Architecture - Clean & Maintainable**
-
 FlowScribe is a Chrome extension that records browser interactions and generates test automation scripts for popular frameworks like Playwright, Selenium, Cypress, and Puppeteer.
 
 ## ✨ Recent Improvements

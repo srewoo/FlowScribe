@@ -32,10 +32,15 @@ class FlowScribeBackground {
         selectedFramework: 'playwright',
         enableAI: false,
         aiProvider: 'openai',
+        apiKey: '',
         includeScreenshots: true,
         includeAssertions: true,
         addComments: true,
-        theme: 'light'
+        theme: 'light',
+        enableSelfHealing: true,
+        enableNetworkRecording: true,
+        enablePOMGeneration: true,
+        cicdPlatform: 'github-actions'
       };
     } catch (error) {
       console.error('Failed to load settings:', error);
@@ -43,10 +48,15 @@ class FlowScribeBackground {
         selectedFramework: 'playwright',
         enableAI: false,
         aiProvider: 'openai',
+        apiKey: '',
         includeScreenshots: true,
         includeAssertions: true,
         addComments: true,
-        theme: 'light'
+        theme: 'light',
+        enableSelfHealing: true,
+        enableNetworkRecording: true,
+        enablePOMGeneration: true,
+        cicdPlatform: 'github-actions'
       };
     }
   }
@@ -467,12 +477,26 @@ class FlowScribeBackground {
   }
 
   async updateSettings(newSettings) {
-    this.settings = { ...this.settings, ...newSettings };
-    await this.saveSettings();
-    
-    // Update AI service if settings changed
-    if (this.aiService && (newSettings.aiProvider || newSettings.enableAI)) {
-      await this.aiService.saveSettings(this.settings);
+    try {
+      // Merge new settings with existing ones
+      this.settings = { ...this.settings, ...newSettings };
+      
+      // Save to chrome storage
+      await chrome.storage.local.set({ flowScribeSettings: this.settings });
+      
+      // Update AI service with the new settings
+      if (this.aiService) {
+        await this.aiService.updateSettings({
+          provider: newSettings.aiProvider || this.settings.aiProvider,
+          apiKey: newSettings.apiKey || this.settings.apiKey,
+          enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
+        });
+      }
+      
+      console.log('⚙️ Settings updated and saved to storage:', this.settings);
+    } catch (error) {
+      console.error('Failed to update settings:', error);
+      throw error;
     }
   }
 
@@ -822,20 +846,6 @@ class FlowScribeBackground {
     return `By.TAG_NAME, "${element.tagName.toLowerCase()}"`;
   }
 
-  async updateSettings(newSettings) {
-    try {
-      // Merge new settings with existing ones
-      this.settings = { ...this.settings, ...newSettings };
-      
-      // Save to chrome storage
-      await chrome.storage.local.set({ flowScribeSettings: this.settings });
-      
-      console.log('⚙️ Settings updated and saved to storage');
-    } catch (error) {
-      console.error('Failed to update settings:', error);
-      throw error;
-    }
-  }
 
   clearSessions() {
     this.sessions.clear();
