@@ -1,0 +1,38 @@
+{
+  "name": "flowscribe",
+  "version": "1.0.0",
+  "description": "AI-powered Chrome extension that records browser interactions and generates test automation scripts",
+  "main": "manifest.json",
+  "scripts": {
+    "build": "webpack --mode=production",
+    "build:zip": "npm run build && node scripts/create-zip.js",
+    "package": "npm run build && node scripts/create-zip.js",
+    "dev": "webpack --mode=development --watch",
+    "clean": "rimraf dist package",
+    "test": "jest"
+  },
+  "keywords": [
+    "automation",
+    "testing",
+    "playwright",
+    "selenium",
+    "cypress",
+    "chrome-extension"
+  ],
+  "author": "FlowScribe Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.22.0",
+    "@babel/preset-env": "^7.22.0",
+    "archiver": "^7.0.1",
+    "babel-loader": "^9.1.0",
+    "clean-webpack-plugin": "^4.0.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "css-loader": "^6.8.0",
+    "jest": "^29.0.0",
+    "rimraf": "^5.0.0",
+    "style-loader": "^3.3.0",
+    "webpack": "^5.88.0",
+    "webpack-cli": "^5.1.0"
+  }
+}
