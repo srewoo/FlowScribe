@@ -48,10 +48,14 @@
     {
       "resources": [
         "content.js",
+        "enhanced-recorder.js",
         "iframe-recorder.js",
         "network-recorder.js",
-        "self-healing-engine.js",
+        "self-healing/self-healing-engine.js",
         "ai-service.js",
+        "assertion-generator.js",
+        "test-generator.js",
+        "wait-strategy.js",
         "cicd-manager.js",
         "page-object-generator.js",
         "settings-manager.js",

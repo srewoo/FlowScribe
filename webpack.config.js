@@ -7,7 +7,11 @@ module.exports = {
   entry: {
     background: './src/background/background.js',
     popup: './src/popup/popup.js',
-    content: './src/content/content.js'
+    content: './src/content/content.js',
+    'enhanced-recorder': './src/content/enhanced-recorder.js',
+    'assertion-generator': './src/utils/assertion-generator.js',
+    'test-generator': './src/generators/test-generator.js',
+    'wait-strategy': './src/utils/wait-strategy.js'
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
