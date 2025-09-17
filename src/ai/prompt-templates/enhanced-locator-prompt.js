@@ -34,22 +34,137 @@ class EnhancedLocatorPromptGenerator {
    * Generate comprehensive AI prompt for script enhancement
    */
   generateEnhancedPrompt(actions, framework, options = {}) {
-    const pageAnalysis = this.analyzePageStructure(actions);
-    const userJourney = this.extractUserJourney(actions);
-    const elementContext = this.extractElementContext(actions);
+    // TEMPORARILY DISABLED: Use original actions without optimization
+    // const optimizedActions = this.optimizeActionSequence(actions);
+    const originalActions = actions || [];
+    const pageAnalysis = this.analyzePageStructure(originalActions);
+    const userJourney = this.extractUserJourney(originalActions);
+    const elementContext = this.extractElementContext(originalActions);
+    
+    console.log('🎯 AI Prompt Generator - Using all actions without filtering:', originalActions.length);
     
     return {
       systemPrompt: this.buildAdvancedSystemPrompt(framework, options),
-      userPrompt: this.buildAdvancedUserPrompt(actions, framework, pageAnalysis, userJourney, elementContext, options),
+      userPrompt: this.buildAdvancedUserPrompt(originalActions, framework, pageAnalysis, userJourney, elementContext, options),
       contextData: {
         pageAnalysis,
         userJourney,
         elementContext,
-        totalActions: actions.length,
-        uniquePages: [...new Set(actions.map(a => a.url))].length,
+        totalActions: originalActions.length,
+        originalActionCount: actions.length,
+        uniquePages: [...new Set(originalActions.map(a => a.url))].length,
         frameworkCapabilities: this.getFrameworkCapabilities(framework)
       }
     };
+  }
+
+  /**
+   * Optimize action sequence to remove redundant navigations and focus on meaningful interactions
+   */
+  optimizeActionSequence(actions) {
+    const optimizedActions = [];
+    let lastUrl = '';
+    let lastActionTime = 0;
+
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('optimizeActionSequence: actions is not a valid array');
+      return [];
+    }
+
+    for (const action of actions) {
+      // Skip redundant navigation actions
+      if (action.type === 'navigation') {
+        // Keep only user-initiated navigations or significant page changes
+        if (action.isUserInitiated || this.isSignificantPageChange(action.url, lastUrl)) {
+          // Merge with meaningful description instead of just URL
+          const pageContext = this.getPageContext(action.url);
+          optimizedActions.push({
+            ...action,
+            type: 'navigate',
+            description: `Navigate to ${pageContext}`,
+            isUserNavigation: true
+          });
+          lastUrl = action.url;
+        }
+        continue;
+      }
+
+      // Skip rapid duplicate actions
+      if (this.isDuplicateAction(action, optimizedActions[optimizedActions.length - 1], lastActionTime)) {
+        continue;
+      }
+
+      // Keep meaningful interactions
+      if (this.isMeaningfulAction(action)) {
+        optimizedActions.push(action);
+        lastActionTime = action.timestamp;
+        if (action.url) lastUrl = action.url;
+      }
+    }
+
+    return optimizedActions;
+  }
+
+  isSignificantPageChange(newUrl, lastUrl) {
+    if (!lastUrl) return true;
+    
+    // Different domains
+    try {
+      const newDomain = new URL(newUrl).hostname;
+      const lastDomain = new URL(lastUrl).hostname;
+      if (newDomain !== lastDomain) return true;
+    } catch (e) {
+      return true;
+    }
+
+    // Different path structure (not just query params)
+    const newPath = newUrl.split('?')[0].split('#')[0];
+    const lastPath = lastUrl.split('?')[0].split('#')[0];
+    return newPath !== lastPath;
+  }
+
+  getPageContext(url) {
+    try {
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split('/').filter(p => p);
+      
+      // Extract meaningful page identifiers
+      if (pathParts.includes('login')) return 'login page';
+      if (pathParts.includes('dashboard')) return 'dashboard';
+      if (pathParts.includes('profile')) return 'user profile';
+      if (pathParts.includes('home')) return 'home page';
+      if (pathParts.includes('settings')) return 'settings page';
+      
+      // Use last meaningful path segment
+      const lastSegment = pathParts[pathParts.length - 1];
+      return lastSegment ? `${lastSegment} page` : urlObj.hostname;
+    } catch (e) {
+      return 'page';
+    }
+  }
+
+  isDuplicateAction(action, lastAction, lastTime) {
+    if (!lastAction) return false;
+    
+    // Same action type on same element within 500ms
+    if (action.type === lastAction.type && 
+        action.element?.cssSelector === lastAction.element?.cssSelector &&
+        (action.timestamp - lastTime) < 500) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  isMeaningfulAction(action) {
+    const meaningfulTypes = ['click', 'input', 'change', 'submit', 'select', 'navigate'];
+    
+    // Skip noise events
+    if (['mouseover', 'mouseout', 'focus', 'blur'].includes(action.type)) {
+      return false;
+    }
+    
+    return meaningfulTypes.includes(action.type);
   }
 
   /**
@@ -62,6 +177,12 @@ class EnhancedLocatorPromptGenerator {
 3. ROBUST ASSERTION STRATEGIES - Validate every critical aspect of the application
 
 CRITICAL REQUIREMENTS:
+
+🎯 FOCUS ON MEANINGFUL INTERACTIONS:
+- PRIORITIZE actual user interactions (clicks, form fills, submissions) over navigation events
+- MINIMIZE redundant page.goto() calls - use only for initial navigation or significant page changes
+- AVOID generating separate steps for SPA route changes or automatic redirects
+- FOCUS on user-initiated actions that add test value
 
 🎯 LOCATOR GENERATION EXCELLENCE:
 - ANALYZE the actual DOM structure provided, don't assume element attributes
@@ -173,8 +294,13 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
   analyzePageStructure(actions) {
     const pages = new Map();
     
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('analyzePageStructure: actions is not a valid array');
+      return [];
+    }
+    
     actions.forEach(action => {
-      if (!action.url) return;
+      if (!action || !action.url) return;
       
       if (!pages.has(action.url)) {
         pages.set(action.url, {
@@ -235,6 +361,11 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
     let currentPage = null;
     let stepCounter = 1;
     
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('extractUserJourney: actions is not a valid array');
+      return [];
+    }
+    
     actions.forEach((action, index) => {
       // Page navigation
       if (action.url && action.url !== currentPage) {
@@ -270,7 +401,12 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
    * Extract detailed element context for each interaction
    */
   extractElementContext(actions) {
-    return actions.map(action => {
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('extractElementContext: actions is not a valid array');
+      return [];
+    }
+
+    const elementContext = actions.map(action => {
       if (!action.element) return null;
       
       return {
@@ -295,6 +431,16 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
         suggestedAssertions: this.suggestElementAssertions(action.element, action.type)
       };
     }).filter(Boolean);
+
+    console.log('🧩 Element context extracted:', {
+      totalActions: actions.length,
+      actionsWithElements: elementContext.length,
+      elementTypes: elementContext.map(e => e.element?.tagName).filter(Boolean),
+      hasFormContext: elementContext.some(e => e.element?.formContext && Object.keys(e.element.formContext).length > 0),
+      hasAttributes: elementContext.some(e => e.element?.attributes && Object.keys(e.element.attributes).length > 0)
+    });
+
+    return elementContext;
   }
 
   /**

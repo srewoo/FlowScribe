@@ -44,6 +44,49 @@ class FlowScribeUI {
     this.updateUI();
   }
 
+  async loadSettings() {
+    try {
+      // Load settings from chrome storage (using correct key)
+      const result = await chrome.storage.local.get(['flowScribeSettings']);
+      this.settings = result.flowScribeSettings || {};
+      
+      // Apply settings to UI elements if they exist
+      if (this.enableAIToggle) {
+        this.enableAIToggle.checked = this.settings.enableAI || false;
+      }
+      if (this.aiProvider) {
+        this.aiProvider.value = this.settings.aiProvider || 'openai';
+        this.updateModelOptions(); // Update model dropdown based on provider
+      }
+      if (this.aiModel) {
+        this.aiModel.value = this.settings.aiModel || 'gpt-4o';
+      }
+      if (this.apiKey) {
+        this.apiKey.value = this.settings.apiKey || '';
+      }
+      if (this.enableSelfHealing) {
+        this.enableSelfHealing.checked = this.settings.enableSelfHealing !== false;
+      }
+      if (this.enableNetworkRecording) {
+        this.enableNetworkRecording.checked = this.settings.enableNetworkRecording !== false;
+      }
+      if (this.enablePOMGeneration) {
+        this.enablePOMGeneration.checked = this.settings.enablePOMGeneration !== false;
+      }
+      if (this.cicdPlatform) {
+        this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
+      }
+      
+      // Set selectedFramework
+      this.selectedFramework = this.settings.selectedFramework || 'playwright';
+      
+      console.log('✅ Popup settings loaded:', this.settings);
+    } catch (error) {
+      console.error('Failed to load settings in popup:', error);
+      this.settings = {}; // Use empty object as fallback
+    }
+  }
+
   bindElements() {
     // Status elements
     this.statusDot = document.getElementById('statusDot');
@@ -557,28 +600,54 @@ class FlowScribeUI {
         }
       };
 
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_SCRIPT',
-        data: {
-          sessionId: this.currentSession?.id,
-          framework: this.selectedFramework, // FIX: Pass framework at correct level
-          format: 'json',
-          options
-        }
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({
+          type: 'GENERATE_SCRIPT',
+          data: {
+            sessionId: this.currentSession?.id,
+            framework: this.selectedFramework,
+            format: 'json',
+            options
+          }
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(`Connection failed: ${chrome.runtime.lastError.message}`));
+          } else if (!response) {
+            reject(new Error('No response from background script'));
+          } else {
+            resolve(response);
+          }
+        });
       });
 
       if (!response.success) {
         throw new Error(response.error || 'Failed to export');
       }
 
+      // Handle different response formats
+      let content, filename, mimeType;
+      
+      if (response.script) {
+        // Script generation response
+        content = response.script;
+        filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
+        mimeType = 'text/plain';
+      } else if (response.data || response.exportData) {
+        // Session export response  
+        const exportData = response.data || response.exportData;
+        content = JSON.stringify(exportData, null, 2);
+        filename = `flowscribe-export-${Date.now()}.json`;
+        mimeType = 'application/json';
+      } else {
+        throw new Error('No export data received from background script');
+      }
+
       // Create download
-      const blob = new Blob([JSON.stringify(response.exportData, null, 2)], { 
-        type: 'application/json' 
-      });
+      const blob = new Blob([content], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `flowscribe-${exportType}-export-${Date.now()}.json`;
+      a.download = filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -815,7 +884,14 @@ class FlowScribeUI {
 
   async handleAIEnhancementRequest(data, sendResponse) {
     try {
-      console.log('🤖 Processing AI enhancement request in popup context...');
+      console.log('🤖 POPUP: Processing AI enhancement request in popup context...');
+      console.log('📊 POPUP: AI Request Data:', {
+        framework: data.framework,
+        actionCount: data.actions?.length || 0,
+        provider: data.settings?.aiProvider,
+        model: data.settings?.aiModel,
+        hasApiKey: !!data.settings?.apiKey
+      });
       
       // Import AI service dynamically (safe in popup context)
       const AIServiceModule = await import('../utils/ai-service.js');
@@ -837,6 +913,8 @@ class FlowScribeUI {
         throw new Error('AI service not properly configured');
       }
       
+      console.log('🚀 POPUP: Starting LLM processing with', data.actions?.length || 0, 'actions...');
+      
       // Generate enhanced script
       const enhancedScript = await aiService.enhanceScript(
         data.actions, 
@@ -844,13 +922,24 @@ class FlowScribeUI {
         data.options
       );
       
-      console.log('✅ AI enhancement completed successfully');
+      console.log('✅ POPUP: LLM enhancement completed successfully');
+      console.log('📏 POPUP: Enhanced script length:', enhancedScript?.length || 0, 'characters');
       sendResponse({ success: true, enhancedScript });
       
     } catch (error) {
       console.error('❌ AI enhancement failed:', error);
       sendResponse({ success: false, error: error.message });
     }
+  }
+
+  getFileExtension(framework) {
+    const extensions = {
+      playwright: 'js',
+      selenium: 'py',
+      cypress: 'js',
+      puppeteer: 'js'
+    };
+    return extensions[framework] || 'txt';
   }
 }
 

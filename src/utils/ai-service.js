@@ -56,7 +56,16 @@ class AIService {
         maxTokens: 2000,
         temperature: 0.1
       };
-      console.log('🤖 AI settings loaded successfully');
+      
+      // Validate model for the selected provider
+      this.validateModelForProvider();
+      
+      console.log('🤖 AI settings loaded successfully:', {
+        provider: this.settings.provider,
+        model: this.settings.model,
+        enableAI: this.settings.enableAI,
+        hasApiKey: !!this.settings.apiKey
+      });
     } catch (error) {
       console.error('Failed to load AI settings:', error.message || error);
       // Use default settings if storage is unavailable
@@ -68,6 +77,14 @@ class AIService {
         maxTokens: 2000,
         temperature: 0.1
       };
+    }
+  }
+
+  validateModelForProvider() {
+    const provider = this.providers[this.settings.provider];
+    if (provider && provider.models && !provider.models.includes(this.settings.model)) {
+      console.warn(`⚠️ Model '${this.settings.model}' not valid for provider '${this.settings.provider}', using default '${provider.defaultModel}'`);
+      this.settings.model = provider.defaultModel;
     }
   }
 
@@ -93,23 +110,35 @@ class AIService {
   }
 
   async enhanceScript(actions, framework, options = {}) {
+    console.log('🤖 LLM ENHANCEMENT STARTED:', {
+      provider: this.settings.provider,
+      model: this.settings.model,
+      framework,
+      actionCount: actions?.length || 0,
+      hasElementData: actions?.some(a => a.element && Object.keys(a.element).length > 0),
+      isConfigured: this.isConfigured()
+    });
+
     if (!this.isConfigured()) {
-      console.log('AI not configured, using template mode');
+      console.log('❌ AI not configured, using template mode');
       return this.generateTemplateScript(actions, framework);
     }
 
     try {
       const prompt = this.buildEnhancementPrompt(actions, framework, options);
+      console.log('📝 Sending prompt to LLM with action data...');
       const response = await this.callAIProvider(prompt);
       
       if (response && response.enhancedScript) {
+        console.log('✅ LLM ENHANCEMENT COMPLETED successfully');
+        console.log('🎯 LLM Enhanced Script Length:', response.enhancedScript?.length || 0, 'characters');
         return response.enhancedScript;
       } else {
-        console.warn('AI response invalid, falling back to template');
+        console.warn('❌ AI response invalid, falling back to template');
         return this.generateTemplateScript(actions, framework);
       }
     } catch (error) {
-      console.error('AI enhancement failed:', error);
+      console.error('❌ LLM ENHANCEMENT FAILED:', error);
       return this.generateTemplateScript(actions, framework);
     }
   }
@@ -423,25 +452,67 @@ ACTION ${index + 1} (${action.type}):
   }
 
   async callOpenAI(prompt, provider) {
+    // Validate model for OpenAI
+    const validModels = provider.models || ['gpt-4o-mini', 'gpt-4o'];
+    let modelToUse = this.settings.model;
+    
+    if (!validModels.includes(modelToUse)) {
+      console.warn(`⚠️ Invalid OpenAI model '${modelToUse}', falling back to '${provider.defaultModel}'`);
+      modelToUse = provider.defaultModel;
+    }
+
+    // Validate prompt lengths to prevent 400 errors
+    const maxPromptLength = 50000; // Conservative limit
+    let systemPrompt = prompt.systemPrompt || '';
+    let userPrompt = prompt.userPrompt || '';
+    
+    if (systemPrompt.length > maxPromptLength) {
+      console.warn(`⚠️ System prompt too long (${systemPrompt.length} chars), truncating to ${maxPromptLength}`);
+      systemPrompt = systemPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
+    }
+    
+    if (userPrompt.length > maxPromptLength) {
+      console.warn(`⚠️ User prompt too long (${userPrompt.length} chars), truncating to ${maxPromptLength}`);
+      userPrompt = userPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
+    }
+
+    const requestBody = {
+      model: modelToUse,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: this.settings.maxTokens,
+      temperature: this.settings.temperature
+    };
+
+    console.log('🔧 OpenAI API Request:', {
+      endpoint: provider.endpoint,
+      model: modelToUse,
+      messageCount: requestBody.messages.length,
+      systemPromptLength: prompt.systemPrompt?.length || 0,
+      userPromptLength: prompt.userPrompt?.length || 0,
+      maxTokens: this.settings.maxTokens,
+      temperature: this.settings.temperature
+    });
+
     const response = await fetch(provider.endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.settings.apiKey}`
       },
-      body: JSON.stringify({
-        model: this.settings.model,
-        messages: [
-          { role: 'system', content: prompt.systemPrompt },
-          { role: 'user', content: prompt.userPrompt }
-        ],
-        max_tokens: this.settings.maxTokens,
-        temperature: this.settings.temperature
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error('❌ OpenAI API Error Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      });
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
@@ -515,6 +586,12 @@ ACTION ${index + 1} (${action.type}):
   }
 
   generateTemplateScript(actions, framework) {
+    console.log('📝 TEMPLATE GENERATION STARTED (Non-AI):', {
+      framework,
+      actionCount: actions?.length || 0,
+      reason: 'AI disabled or fallback mode'
+    });
+    
     const generators = {
       playwright: this.generatePlaywrightTemplate,
       selenium: this.generateSeleniumTemplate,
@@ -527,10 +604,19 @@ ACTION ${index + 1} (${action.type}):
       throw new Error(`Unsupported framework: ${framework}`);
     }
 
-    return generator.call(this, actions);
+    const templateScript = generator.call(this, actions);
+    console.log('✅ TEMPLATE GENERATION COMPLETED (Non-AI)');
+    console.log('📏 Template script length:', templateScript?.length || 0, 'characters');
+    
+    return templateScript;
   }
 
   generatePlaywrightTemplate(actions) {
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('generatePlaywrightTemplate: actions is not a valid array');
+      actions = [];
+    }
+
     const lines = [
       `import { test, expect } from '@playwright/test';`,
       ``,
@@ -605,6 +691,11 @@ ACTION ${index + 1} (${action.type}):
   }
 
   generateSeleniumTemplate(actions) {
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('generateSeleniumTemplate: actions is not a valid array');
+      actions = [];
+    }
+
     const lines = [
       `from selenium import webdriver`,
       `from selenium.webdriver.common.by import By`,
@@ -686,6 +777,11 @@ ACTION ${index + 1} (${action.type}):
   }
 
   generateCypressTemplate(actions) {
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('generateCypressTemplate: actions is not a valid array');
+      actions = [];
+    }
+
     const lines = [
       `// FlowScribe generated test - ${new Date().toISOString()}`,
       `// Total actions: ${actions.length}`,
@@ -744,6 +840,11 @@ ACTION ${index + 1} (${action.type}):
   }
 
   generatePuppeteerTemplate(actions) {
+    if (!actions || !Array.isArray(actions)) {
+      console.warn('generatePuppeteerTemplate: actions is not a valid array');
+      actions = [];
+    }
+
     const lines = [
       `const puppeteer = require('puppeteer');`,
       ``,

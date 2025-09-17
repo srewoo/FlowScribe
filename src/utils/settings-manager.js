@@ -1,7 +1,7 @@
 // FlowScribe Settings Manager
 class SettingsManager {
   constructor() {
-    this.STORAGE_KEYS = { SETTINGS: 'flowscribe_settings' };
+    this.STORAGE_KEYS = { SETTINGS: 'flowScribeSettings' };
     this.DEFAULT_SETTINGS = {
       selectedFramework: 'playwright', 
       enableAI: false, 

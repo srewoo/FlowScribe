@@ -174,20 +174,75 @@ class FlowScribeBackground {
           });
           break;
 
+        case 'UPDATE_SETTINGS':
+          this.updateSettings(message.settings)
+            .then(() => sendResponse({ success: true, settings: this.settings }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+          return true; // Keep channel open for async response
+
+        case 'ACTION_RECORDED':
+          this.handleSingleActionRecorded(message, sender.tab.id);
+          sendResponse({ success: true });
+          break;
+
         case 'ACTIONS_RECORDED':
           this.handleActionsRecorded(message, sender.tab.id);
           sendResponse({ success: true });
           break;
 
+        case 'GET_SESSION_ACTIONS':
+          const sessionForActions = this.sessions.get(this.currentSessionId);
+          if (sessionForActions) {
+            console.log('📤 Sending', sessionForActions.actions.length, 'actions to content script for restoration');
+            sendResponse({ 
+              success: true, 
+              actions: sessionForActions.actions,
+              sessionId: this.currentSessionId
+            });
+          } else {
+            sendResponse({ success: false, actions: [] });
+          }
+          break;
+
         case 'GENERATE_SCRIPT':
           const framework = message.data?.framework || message.framework;
-          const actions = message.data?.actions || message.actions;
+          let actions = message.data?.actions || message.actions;
           const options = message.data?.options || message.options || {};
+          const sessionId = message.data?.sessionId;
           
           if (!framework) {
             sendResponse({ success: false, error: 'Framework not specified' });
             return;
           }
+          
+          // Get actions from session if not provided
+          if (!actions && sessionId) {
+            const session = this.sessions.get(sessionId);
+            if (session) {
+              actions = session.actions;
+            }
+          }
+          
+          // Get actions from current session if still no actions
+          if (!actions && this.currentSessionId) {
+            const currentSession = this.sessions.get(this.currentSessionId);
+            if (currentSession) {
+              actions = currentSession.actions;
+            }
+          }
+          
+          if (!actions || actions.length === 0) {
+            console.warn('❌ No actions found for script generation');
+            sendResponse({ success: false, error: 'No actions found to generate script' });
+            return;
+          }
+          
+          console.log('🎬 Generating script with actions:', {
+            actionCount: actions.length,
+            actionTypes: actions.map(a => a.type),
+            hasElementData: actions.some(a => a.element && Object.keys(a.element).length > 0),
+            framework
+          });
           
           this.generateScript(framework, actions, options)
             .then(script => sendResponse({ success: true, script }))
@@ -233,9 +288,20 @@ class FlowScribeBackground {
           return true;
 
         case 'EXPORT_SESSION':
-          this.exportSession(message.sessionId, message.format)
-            .then(exportData => sendResponse({ success: true, data: exportData }))
-            .catch(error => sendResponse({ success: false, error: error.message }));
+          try {
+            this.exportSession(message.sessionId, message.format)
+              .then(exportData => {
+                console.log('✅ Export session successful:', exportData);
+                sendResponse({ success: true, data: exportData });
+              })
+              .catch(error => {
+                console.error('❌ Export session failed:', error);
+                sendResponse({ success: false, error: error.message });
+              });
+          } catch (error) {
+            console.error('❌ Export session error:', error);
+            sendResponse({ success: false, error: error.message });
+          }
           return true;
       }
     });
@@ -248,15 +314,17 @@ class FlowScribeBackground {
         const session = this.sessions.get(this.currentSessionId);
         if (session && session.tabId === tabId) {
           
-          // Track navigation
+          // Track navigation (TEMPORARILY DISABLED FILTERING - record all navigations)
           if (changeInfo.url) {
             session.actions.push({
               id: Date.now(),
               type: 'navigation',
               timestamp: Date.now(),
               url: changeInfo.url,
-              title: tab.title || ''
+              title: tab.title || '',
+              isUserInitiated: this.isUserInitiatedNavigation(session.actions)
             });
+            console.log('📍 Navigation recorded:', changeInfo.url);
           }
           
           // Auto-restore recording after page loads
@@ -447,32 +515,104 @@ class FlowScribeBackground {
     console.log('▶️ Recording session resumed');
   }
 
+  shouldRecordNavigation(newUrl, existingActions) {
+    // Don't record if it's the same URL as the last action
+    const lastAction = existingActions[existingActions.length - 1];
+    if (lastAction && lastAction.url === newUrl) {
+      return false;
+    }
+
+    // Don't record rapid successive navigation changes (likely redirects)
+    const recentNavigations = existingActions
+      .filter(a => a.type === 'navigation')
+      .slice(-2);
+    
+    if (recentNavigations.length >= 2) {
+      const timeDiff = Date.now() - recentNavigations[recentNavigations.length - 1].timestamp;
+      if (timeDiff < 2000) { // Less than 2 seconds
+        return false;
+      }
+    }
+
+    // Skip common single-page app hash changes that don't represent user navigation
+    if (lastAction && lastAction.url && newUrl) {
+      const lastBase = lastAction.url.split('#')[0].split('?')[0];
+      const newBase = newUrl.split('#')[0].split('?')[0];
+      if (lastBase === newBase) {
+        return false; // Same base URL, likely SPA navigation
+      }
+    }
+
+    return true;
+  }
+
+  isUserInitiatedNavigation(existingActions) {
+    // Check if there was a recent click action that might have triggered this navigation
+    const recentActions = existingActions.slice(-5); // Last 5 actions
+    const hasRecentClick = recentActions.some(action => 
+      action.type === 'click' && 
+      (Date.now() - action.timestamp) < 3000 && // Within 3 seconds
+      (action.element?.tagName === 'A' || action.element?.type === 'submit')
+    );
+    
+    return hasRecentClick;
+  }
+
+  handleSingleActionRecorded(message, tabId) {
+    if (!this.currentSessionId) return;
+
+    const session = this.sessions.get(this.currentSessionId);
+    if (session && session.tabId === tabId) {
+      session.actions.push(message.action);
+      console.log('💾 Action stored in session:', {
+        type: message.action.type,
+        totalSessionActions: session.actions.length,
+        url: message.url
+      });
+    }
+  }
+
   handleActionsRecorded(message, tabId) {
     if (!this.currentSessionId) return;
 
     const session = this.sessions.get(this.currentSessionId);
     if (session && session.tabId === tabId) {
       session.actions.push(...message.actions);
+      console.log('💾 Multiple actions stored in session:', {
+        newActions: message.actions.length,
+        totalSessionActions: session.actions.length
+      });
     }
   }
 
   async generateScript(framework, actions, options = {}) {
+    console.log('🎭 Script generation started:', {
+      framework,
+      actionCount: actions?.length || 0,
+      aiEnabled: this.settings.enableAI,
+      hasApiKey: !!this.settings.apiKey,
+      useAI: options.useAI !== false
+    });
+
     // Try AI enhancement if enabled and configured
     if (this.settings.enableAI && this.settings.apiKey && options.useAI !== false) {
       try {
-        console.log('🤖 Requesting AI enhancement from popup context...');
+        console.log('🤖 ATTEMPTING LLM GENERATION - Requesting AI enhancement from popup context...');
         const enhancedScript = await this.requestAIEnhancement(framework, actions, options);
         if (enhancedScript) {
-          console.log('✅ AI enhancement successful');
+          console.log('✅ SUCCESS: Script generated using LLM (AI-Enhanced)');
+          console.log('🎯 LLM Script Preview:', enhancedScript.substring(0, 200) + '...');
           return enhancedScript;
         }
       } catch (error) {
-        console.warn('🔄 AI enhancement failed, falling back to template:', error.message);
+        console.warn('❌ LLM GENERATION FAILED - Falling back to template:', error.message);
       }
+    } else {
+      console.log('⚠️ AI generation skipped - AI disabled or no API key');
     }
 
     // Fallback to template generation
-    console.log('📝 Using template generation');
+    console.log('📝 FALLBACK: Using template generation (Non-AI)');
     const generators = {
       playwright: this.generatePlaywrightScript,
       selenium: this.generateSeleniumScript,
@@ -485,7 +625,10 @@ class FlowScribeBackground {
       throw new Error(`Unsupported framework: ${framework}`);
     }
 
-    return generator.call(this, actions);
+    const templateScript = generator.call(this, actions);
+    console.log('✅ SUCCESS: Script generated using TEMPLATE (Non-AI)');
+    console.log('🎯 Template Script Preview:', templateScript.substring(0, 200) + '...');
+    return templateScript;
   }
 
   async requestAIEnhancement(framework, actions, options = {}) {

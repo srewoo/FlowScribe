@@ -8,10 +8,7 @@
     "storage",
     "tabs",
     "scripting",
-    "webNavigation",
-    "webRequest",
-    "downloads",
-    "debugger"
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"

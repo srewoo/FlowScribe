@@ -1,7 +1,7 @@
 {
   "name": "flowscribe",
-  "version": "1.0.0",
-  "description": "AI-powered Chrome extension that records browser interactions and generates test automation scripts",
+  "version": "1.0.1",
+  "description": "Navigation to Automation",
   "main": "manifest.json",
   "scripts": {
     "build": "webpack --mode=production",
@@ -19,7 +19,7 @@
     "chrome-extension"
   ],
   "author": {
-    "name": "FlowScribe Team",
+    "name": "sharaj Rewoo",
     "email": "srewoo@gmail.com",
     "url": "https://github.com/srewoo/FlowScribe"
   },

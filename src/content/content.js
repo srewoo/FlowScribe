@@ -400,6 +400,58 @@ class FlowScribeRecorder {
     });
   }
 
+  async startRecording(isRestore = false) {
+    if (this.isRecording) return;
+    
+    // If this is a restore after page reload, get existing actions from background
+    if (isRestore) {
+      try {
+        console.log('🔄 Restoring recording state and existing actions...');
+        const response = await chrome.runtime.sendMessage({ type: 'GET_SESSION_ACTIONS' });
+        if (response && response.success && response.actions) {
+          this.actions = response.actions;
+          console.log(`✅ Restored ${this.actions.length} existing actions from session`);
+        }
+      } catch (error) {
+        console.warn('Failed to restore actions:', error);
+      }
+    }
+    
+    this.isRecording = true;
+    this.isPaused = false;
+    console.log(`🎬 FlowScribe recording started${isRestore ? ' (restored)' : ''} - Total actions: ${this.actions.length}`);
+    
+    this.setupEventListeners();
+    this.showRecordingIndicator();
+    
+    // Send initial status to background
+    chrome.runtime.sendMessage({ 
+      type: 'RECORDING_STARTED', 
+      isRestore,
+      timestamp: Date.now(),
+      url: window.location.href,
+      existingActionCount: this.actions.length
+    });
+  }
+
+  stopRecording() {
+    if (!this.isRecording) return;
+    
+    this.isRecording = false;
+    this.isPaused = false;
+    this.removeEventListeners();
+    this.hideRecordingIndicator();
+    
+    console.log(`🛑 FlowScribe recording stopped - Total actions recorded: ${this.actions.length}`);
+    
+    // Send stop status to background
+    chrome.runtime.sendMessage({ 
+      type: 'RECORDING_STOPPED', 
+      timestamp: Date.now(),
+      totalActions: this.actions.length
+    });
+  }
+
   pauseRecording() {
     if (!this.isRecording) return;
     
@@ -477,7 +529,21 @@ class FlowScribeRecorder {
     
     this.actions.push(optimizedAction);
 
-    console.log('Action recorded:', optimizedAction);
+    console.log('✅ Action recorded with DOM data:', {
+      type: optimizedAction.type,
+      element: optimizedAction.element,
+      hasAttributes: !!optimizedAction.element?.attributes,
+      hasTestAttributes: !!optimizedAction.element?.testAttributes,
+      totalActionsRecorded: this.actions.length
+    });
+
+    // Send individual action to background script immediately
+    chrome.runtime.sendMessage({
+      type: 'ACTION_RECORDED',
+      action: optimizedAction,
+      sessionActions: this.actions.length,
+      url: window.location.href
+    });
   }
 
   optimizeAction(action) {
