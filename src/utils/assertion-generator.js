@@ -187,6 +187,10 @@ class AssertionGenerator {
       message: 'Main content should be visible'
     });
 
+    // Add page-level element assertions for random but important elements
+    const pageElementAssertions = this.generatePageStructureAssertions(context);
+    assertions.push(...pageElementAssertions);
+
     return assertions;
   }
 
@@ -578,6 +582,110 @@ class AssertionGenerator {
   shouldCheckPageLoad(action) {
     return action.type === 'navigate' ||
            (action.type === 'click' && action.element?.tagName === 'A');
+  }
+
+  /**
+   * Generate assertions for common page structure elements (random but important)
+   */
+  generatePageStructureAssertions(context) {
+    const assertions = [];
+    const commonSelectors = [
+      // Navigation elements
+      { selector: 'nav', description: 'Main navigation should be present', priority: 'medium' },
+      { selector: '[role="navigation"]', description: 'Navigation landmark should exist', priority: 'medium' },
+      { selector: 'header', description: 'Page header should be present', priority: 'medium' },
+      
+      // Main content areas
+      { selector: 'main', description: 'Main content area should be present', priority: 'high' },
+      { selector: '[role="main"]', description: 'Main landmark should exist', priority: 'high' },
+      { selector: 'h1', description: 'Page should have main heading', priority: 'high' },
+      
+      // Common UI elements
+      { selector: '[data-testid]', description: 'Page should have testable elements', priority: 'low' },
+      { selector: 'button, [role="button"]', description: 'Interactive buttons should be present', priority: 'medium' },
+      
+      // Loading/error states
+      { selector: ':not(.loading):not([data-loading="true"])', description: 'Loading state should be complete', priority: 'high' },
+      { selector: ':not(.error):not([data-error="true"])', description: 'No error state should be present', priority: 'high' },
+      
+      // Footer
+      { selector: 'footer', description: 'Page footer should be present', priority: 'low' }
+    ];
+
+    // Add conditional assertions based on URL patterns
+    const urlPattern = this.analyzeURLPattern(context.url);
+    const conditionalSelectors = this.getURLSpecificSelectors(urlPattern);
+    commonSelectors.push(...conditionalSelectors);
+
+    commonSelectors.forEach(({ selector, description, priority = 'low' }) => {
+      assertions.push({
+        type: 'page_structure',
+        selector: selector,
+        message: description,
+        priority: priority,
+        optional: priority === 'low' // Low priority assertions are optional
+      });
+    });
+
+    return assertions;
+  }
+
+  /**
+   * Analyze URL pattern to determine page type
+   */
+  analyzeURLPattern(url) {
+    if (!url) return 'unknown';
+    
+    const patterns = {
+      login: /\/(login|signin|auth)/i,
+      dashboard: /\/(dashboard|home|main)/i,
+      profile: /\/(profile|account|user)/i,
+      settings: /\/(settings|config|preferences)/i,
+      form: /\/(form|create|edit|new)/i,
+      list: /\/(list|index|browse|search)/i,
+      detail: /\/(detail|view|show|[0-9]+)/i
+    };
+
+    for (const [type, pattern] of Object.entries(patterns)) {
+      if (pattern.test(url)) return type;
+    }
+    
+    return 'general';
+  }
+
+  /**
+   * Get page-type specific selectors for random element validation
+   */
+  getURLSpecificSelectors(pageType) {
+    const typeSelectors = {
+      login: [
+        { selector: 'input[type="email"], input[type="text"][name*="email"]', description: 'Email/username field should exist on login page', priority: 'high' },
+        { selector: 'input[type="password"]', description: 'Password field should exist on login page', priority: 'high' },
+        { selector: 'button[type="submit"], .login-btn', description: 'Login button should exist', priority: 'high' }
+      ],
+      dashboard: [
+        { selector: '.dashboard, [data-testid*="dashboard"]', description: 'Dashboard container should exist', priority: 'high' },
+        { selector: '.widget, .card, .panel', description: 'Dashboard widgets/cards should be present', priority: 'medium' },
+        { selector: '[data-testid*="metric"], .metric', description: 'Dashboard metrics should be displayed', priority: 'medium' }
+      ],
+      profile: [
+        { selector: '.profile, [data-testid*="profile"]', description: 'Profile container should exist', priority: 'high' },
+        { selector: '.avatar, .profile-image', description: 'Profile image/avatar should exist', priority: 'medium' },
+        { selector: '.profile-info, .user-details', description: 'Profile information section should exist', priority: 'medium' }
+      ],
+      settings: [
+        { selector: '.settings, [data-testid*="settings"]', description: 'Settings container should exist', priority: 'high' },
+        { selector: '.settings-tab, .tab', description: 'Settings tabs/sections should exist', priority: 'medium' },
+        { selector: 'input, select, textarea', description: 'Settings form controls should exist', priority: 'medium' }
+      ],
+      form: [
+        { selector: 'form', description: 'Form element should exist on form page', priority: 'high' },
+        { selector: '.form-group, .field', description: 'Form fields should be properly grouped', priority: 'medium' },
+        { selector: 'button[type="submit"], .submit-btn', description: 'Submit button should exist', priority: 'high' }
+      ]
+    };
+
+    return typeSelectors[pageType] || [];
   }
 }
 

@@ -264,6 +264,15 @@ ${this.generateBasicScript(actions, framework)}
 - Assert loading states and dynamic content
 - Include accessibility checks for key interactions
 
+🎯 PAGE-LEVEL ASSERTIONS (On navigation/page load):
+- Assert on key page structure elements (headers, navigation, main content areas)
+- Validate presence of important buttons/links that define the page (even if not clicked)
+- Check for expected text content that confirms correct page load
+- Verify breadcrumbs, page titles, and navigation elements
+- Assert on random but important elements that should exist on each page type
+- Validate loading indicators are gone and page is fully rendered
+- Check for error messages or success indicators as appropriate
+
 🔄 COMPLETE JOURNEY COVERAGE:
 - Ensure EVERY recorded action is represented in the final script
 - Add appropriate waits for dynamic content
