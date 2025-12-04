@@ -44,49 +44,6 @@ class FlowScribeUI {
     this.updateUI();
   }
 
-  async loadSettings() {
-    try {
-      // Load settings from chrome storage (using correct key)
-      const result = await chrome.storage.local.get(['flowScribeSettings']);
-      this.settings = result.flowScribeSettings || {};
-      
-      // Apply settings to UI elements if they exist
-      if (this.enableAIToggle) {
-        this.enableAIToggle.checked = this.settings.enableAI || false;
-      }
-      if (this.aiProvider) {
-        this.aiProvider.value = this.settings.aiProvider || 'openai';
-        this.updateModelOptions(); // Update model dropdown based on provider
-      }
-      if (this.aiModel) {
-        this.aiModel.value = this.settings.aiModel || 'gpt-4o';
-      }
-      if (this.apiKey) {
-        this.apiKey.value = this.settings.apiKey || '';
-      }
-      if (this.enableSelfHealing) {
-        this.enableSelfHealing.checked = this.settings.enableSelfHealing !== false;
-      }
-      if (this.enableNetworkRecording) {
-        this.enableNetworkRecording.checked = this.settings.enableNetworkRecording !== false;
-      }
-      if (this.enablePOMGeneration) {
-        this.enablePOMGeneration.checked = this.settings.enablePOMGeneration !== false;
-      }
-      if (this.cicdPlatform) {
-        this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
-      }
-      
-      // Set selectedFramework
-      this.selectedFramework = this.settings.selectedFramework || 'playwright';
-      
-      console.log('✅ Popup settings loaded:', this.settings);
-    } catch (error) {
-      console.error('Failed to load settings in popup:', error);
-      this.settings = {}; // Use empty object as fallback
-    }
-  }
-
   bindElements() {
     // Status elements
     this.statusDot = document.getElementById('statusDot');
@@ -232,6 +189,37 @@ class FlowScribeUI {
         console.error('Failed to load settings:', response?.error || 'Unknown error');
         this.settings = this.getDefaultSettings();
       }
+
+      // Apply settings to UI elements
+      if (this.enableAIToggle) {
+        this.enableAIToggle.checked = this.settings.enableAI || false;
+      }
+      if (this.aiProvider) {
+        this.aiProvider.value = this.settings.aiProvider || 'openai';
+        this.updateModelOptions();
+      }
+      if (this.aiModel) {
+        this.aiModel.value = this.settings.aiModel || 'gpt-4o';
+      }
+      if (this.apiKey) {
+        this.apiKey.value = this.settings.apiKey || '';
+      }
+      if (this.enableSelfHealing) {
+        this.enableSelfHealing.checked = this.settings.enableSelfHealing !== false;
+      }
+      if (this.enableNetworkRecording) {
+        this.enableNetworkRecording.checked = this.settings.enableNetworkRecording !== false;
+      }
+      if (this.enablePOMGeneration) {
+        this.enablePOMGeneration.checked = this.settings.enablePOMGeneration !== false;
+      }
+      if (this.cicdPlatform) {
+        this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
+      }
+
+      this.selectedFramework = this.settings.selectedFramework || 'playwright';
+
+      console.log('✅ Popup settings loaded');
     } catch (error) {
       console.error('Failed to load settings:', error);
       this.settings = this.getDefaultSettings();
@@ -695,10 +683,12 @@ class FlowScribeUI {
   updateModelOptions() {
     const provider = this.aiProvider.value;
     const models = this.modelOptions[provider] || [];
-    
-    // Clear existing options
-    this.aiModel.innerHTML = '';
-    
+
+    // Clear existing options safely
+    while (this.aiModel.firstChild) {
+      this.aiModel.removeChild(this.aiModel.firstChild);
+    }
+
     // Add new options
     models.forEach(model => {
       const option = document.createElement('option');
@@ -722,35 +712,6 @@ class FlowScribeUI {
       type: 'UPDATE_SETTINGS',
       settings: { aiModel: this.aiModel.value }
     });
-  }
-
-  async saveSettings() {
-    const newSettings = {
-      selectedFramework: this.selectedFramework,
-      enableAI: this.enableAIToggle.checked,
-      aiProvider: this.aiProvider.value,
-      aiModel: this.aiModel.value,
-      apiKey: this.apiKey.value,
-      enableSelfHealing: this.enableSelfHealing.checked,
-      enableNetworkRecording: this.enableNetworkRecording.checked,
-      enablePOMGeneration: this.enablePOMGeneration.checked,
-      cicdPlatform: this.cicdPlatform.value
-    };
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'UPDATE_SETTINGS',
-        settings: newSettings
-      });
-
-      if (response.success) {
-        this.settings = { ...this.settings, ...newSettings };
-        this.showToast('⚙️ Settings saved successfully!', 'success');
-        this.closeSettings();
-      }
-    } catch (error) {
-      this.showToast(`Failed to save settings: ${error.message}`, 'error');
-    }
   }
 
   async resetSettings() {

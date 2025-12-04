@@ -14,9 +14,22 @@ class FlowScribeRecorder {
     this.setupMessageListener();
     this.setupIframeMonitoring();
     console.log('FlowScribe content script loaded');
-    
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+      this.cleanup();
+    });
+
     // Check if we should be recording (e.g., after page navigation)
     this.checkRecordingState();
+  }
+
+  cleanup() {
+    if (this.actionCounterInterval) {
+      clearInterval(this.actionCounterInterval);
+      this.actionCounterInterval = null;
+    }
+    this.removeEventListeners();
   }
 
   setupMessageListener() {
@@ -63,6 +76,19 @@ class FlowScribeRecorder {
 
     // Listen for messages from iframes
     window.addEventListener('message', (event) => {
+      // Validate origin - only accept messages from iframes we're tracking
+      const isValidOrigin = Array.from(this.iframes.values()).some(iframeInfo => {
+        try {
+          return iframeInfo.element && new URL(iframeInfo.element.src).origin === event.origin;
+        } catch {
+          return false;
+        }
+      });
+
+      if (!isValidOrigin) {
+        return; // Ignore messages from unknown origins
+      }
+
       if (event.data.type === 'FLOWSCRIBE_IFRAME_ACTION' && this.isRecording) {
         this.recordIframeAction(event.data);
       }
@@ -218,187 +244,6 @@ class FlowScribeRecorder {
     }
   }
 
-  // DEPRECATED: Kept for compatibility but should not be used due to CSP violations
-  createIframeRecorderScript(iframeId) {
-    return `
-      (function() {
-        let isRecording = false;
-        
-        window.addEventListener('message', (event) => {
-          if (event.data.type === 'FLOWSCRIBE_IFRAME_START_RECORDING') {
-            isRecording = true;
-            setupEventListeners();
-          } else if (event.data.type === 'FLOWSCRIBE_IFRAME_STOP_RECORDING') {
-            isRecording = false;
-          }
-        });
-
-        function setupEventListeners() {
-          const events = ['click', 'input', 'change', 'focus', 'blur', 'keydown'];
-          
-          events.forEach(eventType => {
-            document.addEventListener(eventType, (event) => {
-              if (!isRecording) return;
-              
-              const target = event.target;
-              if (!target) return;
-
-              const rect = target.getBoundingClientRect();
-              const iframeRect = window.frameElement ? window.frameElement.getBoundingClientRect() : { left: 0, top: 0 };
-
-              const action = {
-                id: Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-                type: eventType,
-                timestamp: Date.now(),
-                url: window.location.href,
-                element: {
-                  tagName: target.tagName,
-                  id: target.id || '',
-                  className: target.className || '',
-                  name: target.name || '',
-                  type: target.type || '',
-                  textContent: target.textContent ? target.textContent.substring(0, 100) : '',
-                  value: target.value || '',
-                  placeholder: target.placeholder || '',
-                  xpath: generateXPath(target),
-                  cssSelector: generateCSSSelector(target),
-                  rect: {
-                    x: rect.x,
-                    y: rect.y,
-                    width: rect.width,
-                    height: rect.height
-                  }
-                },
-                coordinates: {
-                  x: event.clientX || 0,
-                  y: event.clientY || 0
-                },
-                absoluteCoordinates: {
-                  x: (event.clientX || 0) + iframeRect.left,
-                  y: (event.clientY || 0) + iframeRect.top
-                },
-                iframeInfo: {
-                  id: '${iframeId}',
-                  src: window.location.href,
-                  origin: window.location.origin
-                }
-              };
-
-              // Add specific data based on event type
-              if (eventType === 'input' || eventType === 'change') {
-                action.value = target.value;
-              }
-              if (eventType === 'keydown') {
-                action.key = event.key;
-                action.keyCode = event.keyCode;
-              }
-
-              // Send to parent
-              parent.postMessage({
-                type: 'FLOWSCRIBE_IFRAME_ACTION',
-                action: action
-              }, '*');
-            }, true);
-          });
-        }
-
-        function generateXPath(element) {
-          if (!element) return '';
-          
-          if (element.id) {
-            return '//*[@id="' + element.id + '"]';
-          }
-          
-          let path = '';
-          for (; element && element.nodeType === 1; element = element.parentNode) {
-            let index = 1;
-            for (let sibling = element.previousSibling; sibling; sibling = sibling.previousSibling) {
-              if (sibling.nodeType === 1 && sibling.tagName === element.tagName) {
-                index++;
-              }
-            }
-            const tagName = element.tagName.toLowerCase();
-            path = '/' + tagName + '[' + index + ']' + path;
-          }
-          return path;
-        }
-
-        function generateCSSSelector(element) {
-          if (!element) return '';
-          
-          if (element.id) {
-            return '#' + element.id;
-          }
-          
-          let path = '';
-          for (; element && element.nodeType === 1; element = element.parentNode) {
-            let selector = element.tagName.toLowerCase();
-            if (element.className) {
-              selector += '.' + element.className.trim().split(/\\s+/).join('.');
-            }
-            path = path ? selector + ' > ' + path : selector;
-            if (element.id) {
-              path = '#' + element.id + ' > ' + path;
-              break;
-            }
-          }
-          return path;
-        }
-      })();
-    `;
-  }
-
-  startRecording(isRestore = false) {
-    this.isRecording = true;
-    
-    // Only reset actions if this is a new recording, not a restore
-    if (!isRestore) {
-      this.actions = [];
-      this.actionId = 0;
-    }
-    this.setupEventListeners();
-    this.showRecordingIndicator();
-    
-    // Show notification if this is a restore
-    if (isRestore) {
-      this.showRestoreNotification();
-    }
-    
-    // Notify iframes to start recording
-    this.iframes.forEach((iframeInfo, iframeId) => {
-      if (iframeInfo.accessible && iframeInfo.element.contentWindow) {
-        iframeInfo.element.contentWindow.postMessage({
-          type: 'FLOWSCRIBE_IFRAME_START_RECORDING'
-        }, '*');
-      }
-    });
-    
-    console.log(`FlowScribe recording ${isRestore ? 'restored' : 'started'}`);
-  }
-
-  stopRecording() {
-    this.isRecording = false;
-    this.removeEventListeners();
-    this.hideRecordingIndicator();
-    
-    // Notify iframes to stop recording
-    this.iframes.forEach((iframeInfo, iframeId) => {
-      if (iframeInfo.accessible && iframeInfo.element.contentWindow) {
-        iframeInfo.element.contentWindow.postMessage({
-          type: 'FLOWSCRIBE_IFRAME_STOP_RECORDING'
-        }, '*');
-      }
-    });
-
-    console.log('FlowScribe recording stopped. Actions recorded:', this.actions.length);
-    
-    // Send actions to background script
-    chrome.runtime.sendMessage({
-      type: 'ACTIONS_RECORDED',
-      actions: this.actions,
-      url: window.location.href
-    });
-  }
 
   async startRecording(isRestore = false) {
     if (this.isRecording) return;
@@ -420,13 +265,27 @@ class FlowScribeRecorder {
     this.isRecording = true;
     this.isPaused = false;
     console.log(`🎬 FlowScribe recording started${isRestore ? ' (restored)' : ''} - Total actions: ${this.actions.length}`);
-    
+
     this.setupEventListeners();
     this.showRecordingIndicator();
-    
+
+    // Notify iframes to start recording
+    this.iframes.forEach((iframeInfo, iframeId) => {
+      if (iframeInfo.accessible && iframeInfo.element.contentWindow) {
+        try {
+          const targetOrigin = new URL(iframeInfo.element.src).origin;
+          iframeInfo.element.contentWindow.postMessage({
+            type: 'FLOWSCRIBE_IFRAME_START_RECORDING'
+          }, targetOrigin);
+        } catch (error) {
+          console.warn('Failed to send start recording message to iframe:', error);
+        }
+      }
+    });
+
     // Send initial status to background
-    chrome.runtime.sendMessage({ 
-      type: 'RECORDING_STARTED', 
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_STARTED',
       isRestore,
       timestamp: Date.now(),
       url: window.location.href,
@@ -436,17 +295,31 @@ class FlowScribeRecorder {
 
   stopRecording() {
     if (!this.isRecording) return;
-    
+
     this.isRecording = false;
     this.isPaused = false;
     this.removeEventListeners();
     this.hideRecordingIndicator();
-    
+
+    // Notify iframes to stop recording
+    this.iframes.forEach((iframeInfo, iframeId) => {
+      if (iframeInfo.accessible && iframeInfo.element.contentWindow) {
+        try {
+          const targetOrigin = new URL(iframeInfo.element.src).origin;
+          iframeInfo.element.contentWindow.postMessage({
+            type: 'FLOWSCRIBE_IFRAME_STOP_RECORDING'
+          }, targetOrigin);
+        } catch (error) {
+          console.warn('Failed to send stop recording message to iframe:', error);
+        }
+      }
+    });
+
     console.log(`🛑 FlowScribe recording stopped - Total actions recorded: ${this.actions.length}`);
-    
+
     // Send stop status to background
-    chrome.runtime.sendMessage({ 
-      type: 'RECORDING_STOPPED', 
+    chrome.runtime.sendMessage({
+      type: 'RECORDING_STOPPED',
       timestamp: Date.now(),
       totalActions: this.actions.length
     });

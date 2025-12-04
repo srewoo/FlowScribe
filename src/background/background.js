@@ -13,7 +13,27 @@ class FlowScribeBackground {
     this.pomGenerator = null;
     this.settings = {};
     this.sessionHistory = [];
+    this.encryptionKey = 'flowscribe-v1'; // Simple obfuscation key
     this.init();
+  }
+
+  // Simple XOR-based obfuscation for API keys (not cryptographically secure, but better than plain text)
+  obfuscateKey(key) {
+    if (!key) return '';
+    return btoa(key.split('').map((c, i) =>
+      String.fromCharCode(c.charCodeAt(0) ^ this.encryptionKey.charCodeAt(i % this.encryptionKey.length))
+    ).join(''));
+  }
+
+  deobfuscateKey(obfuscated) {
+    if (!obfuscated) return '';
+    try {
+      return atob(obfuscated).split('').map((c, i) =>
+        String.fromCharCode(c.charCodeAt(0) ^ this.encryptionKey.charCodeAt(i % this.encryptionKey.length))
+      ).join('');
+    } catch {
+      return obfuscated; // Return as-is if not obfuscated (backward compatibility)
+    }
   }
 
   async init() {
@@ -48,7 +68,13 @@ class FlowScribeBackground {
         enablePOMGeneration: true,
         cicdPlatform: 'github-actions'
       };
-      console.log('✅ Settings loaded successfully:', this.settings);
+
+      // Deobfuscate API key if it exists
+      if (this.settings.apiKey) {
+        this.settings.apiKey = this.deobfuscateKey(this.settings.apiKey);
+      }
+
+      console.log('✅ Settings loaded successfully');
     } catch (error) {
       console.error('Failed to load settings:', error);
       this.settings = {
@@ -258,12 +284,6 @@ class FlowScribeBackground {
           sendResponse({ success: true, settings: this.settings });
           break;
 
-        case 'UPDATE_SETTINGS':
-          this.updateSettings(message.settings)
-            .then(() => sendResponse({ success: true }))
-            .catch(error => sendResponse({ success: false, error: error.message }));
-          return true;
-
         case 'GET_SESSION_HISTORY':
           sendResponse({ success: true, history: this.sessionHistory });
           break;
@@ -404,7 +424,15 @@ class FlowScribeBackground {
     }
 
     // Start recording in content script
-    await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING' });
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING' });
+    } catch (error) {
+      console.error('Failed to start recording in content script:', error);
+      // Cleanup the session if we can't start recording
+      this.sessions.delete(sessionId);
+      this.currentSessionId = null;
+      throw new Error('Failed to start recording. Please refresh the page and try again.');
+    }
 
     return sessionId;
   }
@@ -676,11 +704,17 @@ class FlowScribeBackground {
     try {
       // Merge new settings with existing ones
       this.settings = { ...this.settings, ...newSettings };
-      
-      // Save to chrome storage
-      await chrome.storage.local.set({ flowScribeSettings: this.settings });
-      
-      // Update AI service with the new settings
+
+      // Create a copy for storage with obfuscated API key
+      const settingsToStore = { ...this.settings };
+      if (settingsToStore.apiKey) {
+        settingsToStore.apiKey = this.obfuscateKey(settingsToStore.apiKey);
+      }
+
+      // Save to chrome storage with obfuscated key
+      await chrome.storage.local.set({ flowScribeSettings: settingsToStore });
+
+      // Update AI service with the new settings (plain text in memory)
       if (this.aiService) {
         await this.aiService.updateSettings({
           provider: newSettings.aiProvider || this.settings.aiProvider,
@@ -689,8 +723,8 @@ class FlowScribeBackground {
           enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
         });
       }
-      
-      console.log('⚙️ Settings updated and saved to storage:', this.settings);
+
+      console.log('⚙️ Settings updated and saved to storage');
     } catch (error) {
       console.error('Failed to update settings:', error);
       throw error;
@@ -800,12 +834,25 @@ class FlowScribeBackground {
     let stepCounter = 1;
 
     optimizedActions.forEach((action, index) => {
+      // Validate action has required data
+      if (!action || !action.type) {
+        console.warn('Skipping invalid action:', action);
+        return;
+      }
+
       // Navigation handling with assertions
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
-        lines.push(`  // Step ${stepCounter++}: Navigate to ${action.url}`);
-        lines.push(`  await page.goto('${action.url}');`);
-        lines.push(`  await expect(page).toHaveURL(/${this.getUrlPattern(action.url)}/);`);
-        currentUrl = action.url;
+        const safeUrl = action.url || 'about:blank';
+        lines.push(`  // Step ${stepCounter++}: Navigate to ${safeUrl}`);
+        lines.push(`  await page.goto('${safeUrl}');`);
+        lines.push(`  await expect(page).toHaveURL(/${this.getUrlPattern(safeUrl)}/);`);
+        currentUrl = safeUrl;
+      }
+
+      // Validate element data exists for non-navigation actions
+      if (action.type !== 'navigation' && !action.element) {
+        console.warn('Skipping action without element data:', action.type);
+        return;
       }
 
       const selector = this.getBestSelector(action.element);
@@ -814,9 +861,15 @@ class FlowScribeBackground {
       switch (action.type) {
         case 'click':
           lines.push(`  // Step ${stepCounter++}: Click ${elementDesc}`);
-          if (action.iframeInfo) {
-            lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+          if (action.iframeInfo && action.iframeInfo.origin) {
+            const safeOrigin = this.escapeValue(action.iframeInfo.origin);
+            lines.push(`  const frame = await page.frameLocator('iframe[src*="${safeOrigin}"]');`);
             lines.push(`  await frame.locator('${selector}').click();`);
+          } else if (action.iframeInfo) {
+            // Fallback if iframe info is incomplete
+            lines.push(`  // Note: Iframe origin not available, using main page`);
+            lines.push(`  await expect(page.locator('${selector}')).toBeVisible();`);
+            lines.push(`  await page.locator('${selector}').click();`);
           } else {
             lines.push(`  await expect(page.locator('${selector}')).toBeVisible();`);
             lines.push(`  await page.locator('${selector}').click();`);
@@ -835,9 +888,10 @@ class FlowScribeBackground {
         case 'change':
           const value = action.value || '';
           lines.push(`  // Step ${stepCounter++}: Enter "${value}" in ${elementDesc}`);
-          
-          if (action.iframeInfo) {
-            lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+
+          if (action.iframeInfo && action.iframeInfo.origin) {
+            const safeOrigin = this.escapeValue(action.iframeInfo.origin);
+            lines.push(`  const frame = await page.frameLocator('iframe[src*="${safeOrigin}"]');`);
             lines.push(`  await frame.locator('${selector}').fill('${this.escapeValue(value)}');`);
           } else {
             lines.push(`  await expect(page.locator('${selector}')).toBeVisible();`);
@@ -854,8 +908,9 @@ class FlowScribeBackground {
         case 'keydown':
           if (action.key === 'Enter') {
             lines.push(`  // Step ${stepCounter++}: Press Enter`);
-            if (action.iframeInfo) {
-              lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+            if (action.iframeInfo && action.iframeInfo.origin) {
+              const safeOrigin = this.escapeValue(action.iframeInfo.origin);
+              lines.push(`  const frame = await page.frameLocator('iframe[src*="${safeOrigin}"]');`);
               lines.push(`  await frame.locator('${selector}').press('Enter');`);
             } else {
               lines.push(`  await page.locator('${selector}').press('Enter');`);
@@ -866,8 +921,9 @@ class FlowScribeBackground {
 
         case 'submit':
           lines.push(`  // Step ${stepCounter++}: Submit form`);
-          if (action.iframeInfo) {
-            lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+          if (action.iframeInfo && action.iframeInfo.origin) {
+            const safeOrigin = this.escapeValue(action.iframeInfo.origin);
+            lines.push(`  const frame = await page.frameLocator('iframe[src*="${safeOrigin}"]');`);
             lines.push(`  await frame.locator('${selector}').press('Enter');`);
           } else {
             lines.push(`  await page.locator('${selector}').click();`);
