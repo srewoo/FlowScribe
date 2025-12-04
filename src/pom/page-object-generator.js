@@ -340,7 +340,7 @@ ${methodImplementations}
    * Get the current page URL
    */
   getPageUrl(): string {
-    return '${this.getBaseUrlPlaceholder()}';
+    return ${this.getBaseUrlPlaceholder('playwright')};
   }
 
   /**
@@ -380,7 +380,7 @@ class ${className}:
     def __init__(self, driver, timeout=10):
         self.driver = driver
         self.wait = WebDriverWait(driver, timeout)
-        self.base_url = "${this.getBaseUrlPlaceholder()}"
+        self.base_url = ${this.getBaseUrlPlaceholder('selenium')}
     
 ${elementDeclarations}
 
@@ -430,7 +430,7 @@ ${methodImplementations}
    * Navigate to this page
    */
   goto(url) {
-    const targetUrl = url || '${this.getBaseUrlPlaceholder()}';
+    const targetUrl = url || ${this.getBaseUrlPlaceholder('cypress')};
     cy.visit(targetUrl);
     return this;
   }
@@ -729,13 +729,232 @@ ${pageInitializations}
   }
 
   generateSectionMethods(elements, sectionName) {
-    // Generate methods specific to this section
-    return [];
+    const methods = [];
+
+    // Check if this is a form section
+    const formElements = elements.filter(el =>
+      ['input', 'select', 'textarea'].includes(el.type)
+    );
+
+    if (formElements.length >= 2) {
+      // Generate a "fill form" method
+      const methodName = `fill${this.toPascalCase(sectionName)}`;
+      const parameters = formElements.map(el => ({
+        name: this.toCamelCase(el.name),
+        type: el.type === 'select' ? 'option' : 'text',
+        required: el.isRequired
+      }));
+
+      methods.push({
+        name: methodName,
+        type: 'form-fill',
+        description: `Fill all fields in the ${sectionName} section`,
+        parameters,
+        elements: formElements,
+        async: true
+      });
+
+      // Generate a "submit form" method if there's a submit button
+      const submitButton = elements.find(el =>
+        el.type === 'button' &&
+        (el.actions.includes('submit') || el.name.toLowerCase().includes('submit'))
+      );
+
+      if (submitButton) {
+        methods.push({
+          name: `submit${this.toPascalCase(sectionName)}`,
+          type: 'form-submit',
+          description: `Submit the ${sectionName} form`,
+          parameters: [],
+          elements: [submitButton],
+          async: true
+        });
+      }
+    }
+
+    // Check for navigation section
+    const navLinks = elements.filter(el =>
+      el.type === 'link' || (el.type === 'button' && el.actions.includes('click'))
+    );
+
+    if (navLinks.length >= 3 && sectionName.match(/nav|menu|header/i)) {
+      navLinks.forEach(link => {
+        methods.push({
+          name: `navigateTo${this.toPascalCase(link.name)}`,
+          type: 'navigation',
+          description: `Navigate to ${link.name}`,
+          parameters: [],
+          elements: [link],
+          async: true
+        });
+      });
+    }
+
+    // Check for modal/dialog section
+    if (sectionName.match(/modal|dialog|popup/i)) {
+      const closeButton = elements.find(el =>
+        el.name.match(/close|cancel|dismiss/i)
+      );
+
+      if (closeButton) {
+        methods.push({
+          name: `close${this.toPascalCase(sectionName)}`,
+          type: 'modal-close',
+          description: `Close the ${sectionName}`,
+          parameters: [],
+          elements: [closeButton],
+          async: true
+        });
+      }
+    }
+
+    // Check for table section
+    if (sectionName.match(/table|list|grid/i)) {
+      methods.push({
+        name: `get${this.toPascalCase(sectionName)}Rows`,
+        type: 'table-read',
+        description: `Get all rows from ${sectionName}`,
+        parameters: [],
+        elements: elements.filter(el => el.type === 'row'),
+        async: true,
+        returns: 'array'
+      });
+    }
+
+    return methods;
   }
 
   generateElementMethods(actions, framework) {
-    // Generate individual element interaction methods
-    return [];
+    const methods = [];
+    const processedElements = new Set();
+
+    // Group actions by element
+    const elementActions = new Map();
+
+    actions.forEach(action => {
+      if (!action.element) return;
+
+      const elementKey = this.generateElementKey(action.element);
+      if (!elementActions.has(elementKey)) {
+        elementActions.set(elementKey, {
+          element: action.element,
+          actions: []
+        });
+      }
+      elementActions.get(elementKey).actions.push(action);
+    });
+
+    // Generate methods for each element
+    for (const [elementKey, data] of elementActions) {
+      if (processedElements.has(elementKey)) continue;
+      processedElements.add(elementKey);
+
+      const elementName = this.generateElementName(data.element);
+      const actionTypes = [...new Set(data.actions.map(a => a.type))];
+
+      // Generate getter method for the element
+      methods.push({
+        name: `get${this.toPascalCase(elementName)}`,
+        type: 'getter',
+        description: `Get the ${elementName} element`,
+        parameters: [],
+        element: data.element,
+        async: false,
+        returns: 'locator'
+      });
+
+      // Generate action-specific methods
+      if (actionTypes.includes('click')) {
+        methods.push({
+          name: `click${this.toPascalCase(elementName)}`,
+          type: 'click',
+          description: `Click the ${elementName}`,
+          parameters: [],
+          element: data.element,
+          async: true
+        });
+      }
+
+      if (actionTypes.includes('input') || actionTypes.includes('change')) {
+        const inputAction = data.actions.find(a => a.type === 'input' || a.type === 'change');
+        methods.push({
+          name: `enter${this.toPascalCase(elementName)}`,
+          type: 'input',
+          description: `Enter text into ${elementName}`,
+          parameters: [
+            {
+              name: 'text',
+              type: 'string',
+              required: true,
+              description: 'Text to enter'
+            }
+          ],
+          element: data.element,
+          async: true
+        });
+
+        // Add clear method for input fields
+        methods.push({
+          name: `clear${this.toPascalCase(elementName)}`,
+          type: 'clear',
+          description: `Clear the ${elementName} field`,
+          parameters: [],
+          element: data.element,
+          async: true
+        });
+      }
+
+      if (actionTypes.includes('select')) {
+        methods.push({
+          name: `select${this.toPascalCase(elementName)}`,
+          type: 'select',
+          description: `Select an option in ${elementName}`,
+          parameters: [
+            {
+              name: 'option',
+              type: 'string',
+              required: true,
+              description: 'Option to select'
+            }
+          ],
+          element: data.element,
+          async: true
+        });
+      }
+
+      // Generate verification methods
+      if (data.element.textContent) {
+        methods.push({
+          name: `verify${this.toPascalCase(elementName)}Text`,
+          type: 'verify',
+          description: `Verify the text of ${elementName}`,
+          parameters: [
+            {
+              name: 'expectedText',
+              type: 'string',
+              required: true,
+              description: 'Expected text content'
+            }
+          ],
+          element: data.element,
+          async: true,
+          isAssertion: true
+        });
+      }
+
+      // Generate visibility check
+      methods.push({
+        name: `is${this.toPascalCase(elementName)}Visible`,
+        type: 'visibility',
+        description: `Check if ${elementName} is visible`,
+        parameters: [],
+        element: data.element,
+        async: true,
+        returns: 'boolean'
+      });
+    }
+
+    return methods;
   }
 
   generateWorkflowMethod(name, workflow, framework) {
@@ -786,8 +1005,16 @@ ${pageInitializations}
     return str.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1_$2').toLowerCase();
   }
 
-  getBaseUrlPlaceholder() {
-    return '${BASE_URL}'; // Template placeholder for base URL
+  getBaseUrlPlaceholder(framework = 'playwright') {
+    // Return framework-specific environment variable patterns
+    const placeholders = {
+      playwright: 'process.env.BASE_URL || "http://localhost:3000"',
+      selenium: 'os.getenv("BASE_URL", "http://localhost:3000")',
+      cypress: 'Cypress.env("baseUrl") || "http://localhost:3000"',
+      puppeteer: 'process.env.BASE_URL || "http://localhost:3000"'
+    };
+
+    return placeholders[framework] || placeholders.playwright;
   }
 }
 

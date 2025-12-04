@@ -214,6 +214,66 @@ CRITICAL REQUIREMENTS:
 🎨 ${framework.toUpperCase()} BEST PRACTICES:
 ${this.getFrameworkSpecificGuidelines(framework)}
 
+📚 FEW-SHOT EXAMPLES (Learn from these):
+
+Example 1 - Button with test ID (BEST):
+Input HTML: <button data-testid="login-btn" class="btn-primary-xyz123">Login</button>
+✅ GOOD: await page.getByTestId('login-btn').click();
+❌ BAD: await page.click('.btn-primary-xyz123');
+Reasoning: data-testid is stable and designed for testing. Avoid auto-generated class names.
+
+Example 2 - Form input with label (SEMANTIC):
+Input HTML: <input id="email" name="email" type="email" aria-label="Email address" placeholder="Enter email">
+✅ GOOD: await page.getByLabel('Email address').fill('user@example.com');
+✅ ALSO GOOD: await page.locator('[name="email"]').fill('user@example.com');
+❌ BAD: await page.locator('#email').fill('user@example.com'); // Less semantic
+Reasoning: aria-label is most semantic. Use name attribute as fallback for form fields.
+
+Example 3 - Link with text (TEXT-BASED):
+Input HTML: <a href="/dashboard" class="nav-link-abc123">Go to Dashboard</a>
+✅ GOOD: await page.getByRole('link', { name: 'Go to Dashboard' }).click();
+✅ ALSO GOOD: await page.getByText('Go to Dashboard', { exact: true }).click();
+❌ BAD: await page.click('.nav-link-abc123');
+Reasoning: Text content is stable for navigation. Role-based locators are most semantic.
+
+Example 4 - Dynamic element (FALLBACK STRATEGY):
+Input HTML: <div class="modal-content-xyz" data-modal-id="confirm-123">
+  <button id="confirm-btn" role="button" aria-label="Confirm action">Confirm</button>
+</div>
+✅ GOOD: await page.getByRole('button', { name: 'Confirm action' }).click();
+✅ FALLBACK: await page.locator('#confirm-btn').click();
+✅ LAST RESORT: await page.locator('[data-modal-id="confirm-123"] button').click();
+❌ BAD: await page.click('.modal-content-xyz button');
+Reasoning: Multiple strategies with priority: role > id > parent context > class
+
+Example 5 - Chain-of-Thought for Complex Selector:
+Input HTML: <form id="signup-form">
+  <input name="username" placeholder="Username" />
+  <input name="password" type="password" placeholder="Password" />
+  <button type="submit">Sign Up</button>
+</form>
+THINKING PROCESS:
+1. Check for data-testid → None found
+2. Check for aria-label → None found
+3. Check for unique name → "username" is semantic
+4. Consider form context → Can scope to form
+5. Text content for button → "Sign Up" is unique
+CODE:
+await page.locator('form#signup-form [name="username"]').fill('testuser');
+await page.locator('form#signup-form [name="password"]').fill('password123');
+await page.getByRole('button', { name: 'Sign Up' }).click();
+Reasoning: Combine form context + name attributes for inputs, role for button.
+
+Example 6 - Negative Scenario Handling:
+Input HTML: <button id="submit-btn" disabled aria-disabled="true">Submit</button>
+✅ GOOD:
+await page.getByRole('button', { name: 'Submit' }).waitFor({ state: 'visible' });
+await expect(page.getByRole('button', { name: 'Submit' })).toBeDisabled();
+// Wait for button to be enabled
+await page.getByRole('button', { name: 'Submit' }).waitFor({ state: 'enabled', timeout: 5000 });
+await page.getByRole('button', { name: 'Submit' }).click();
+Reasoning: Check element state before interaction. Handle disabled states explicitly.
+
 LOCATOR PRIORITY HIERARCHY:
 1. [data-testid] - Highest priority, purpose-built for testing
 2. #unique-id - Stable IDs with semantic meaning (avoid auto-generated)

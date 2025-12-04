@@ -152,64 +152,90 @@ const fs = require('fs');
     let code = '';
     const indent = this.indent(2);
 
+    // Use modern Playwright locator API
+    const locatorCode = this.generateModernLocator(action.target);
+
     switch (action.type) {
       case 'click':
-        code += `${indent}await page.click('${this.generateSelector(action.target)}');\n`;
-        if (action.assertions?.some(a => a.type === 'url_change')) {
-          code += `${indent}await page.waitForURL(/.*/); // Wait for navigation\n`;
+        // Modern: use locator().click() with auto-waiting
+        code += `${indent}await ${locatorCode}.click();\n`;
+        if (includeAssertions && action.assertions?.some(a => a.type === 'url_change')) {
+          code += `${indent}await expect(page).toHaveURL(/.*/); // Wait for navigation\n`;
         }
         break;
 
       case 'double_click':
-        code += `${indent}await page.dblclick('${this.generateSelector(action.target)}');\n`;
+        code += `${indent}await ${locatorCode}.dblclick();\n`;
         break;
 
       case 'right_click':
-        code += `${indent}await page.click('${this.generateSelector(action.target)}', { button: 'right' });\n`;
+        code += `${indent}await ${locatorCode}.click({ button: 'right' });\n`;
         break;
 
       case 'input':
         const value = this.sanitizeString(action.value);
-        code += `${indent}await page.fill('${this.generateSelector(action.target)}', '${value}');\n`;
+        // Modern: use fill() with locator
+        code += `${indent}await ${locatorCode}.fill('${value}');\n`;
+        // Add assertion for non-password fields
+        if (includeAssertions && action.target.type !== 'password') {
+          code += `${indent}await expect(${locatorCode}).toHaveValue('${value}');\n`;
+        }
         break;
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `${indent}await page.selectOption('${this.generateSelector(action.target)}', '${action.value}');\n`;
+          code += `${indent}await ${locatorCode}.selectOption('${action.value}');\n`;
+          if (includeAssertions) {
+            code += `${indent}await expect(${locatorCode}).toHaveValue('${action.value}');\n`;
+          }
         } else if (action.checked !== undefined) {
-          code += `${indent}await page.${action.checked ? 'check' : 'uncheck'}('${this.generateSelector(action.target)}');\n`;
+          const checkMethod = action.checked ? 'check' : 'uncheck';
+          code += `${indent}await ${locatorCode}.${checkMethod}();\n`;
+          if (includeAssertions) {
+            const assertion = action.checked ? 'toBeChecked' : 'not.toBeChecked';
+            code += `${indent}await expect(${locatorCode}).${assertion}();\n`;
+          }
         }
         break;
 
       case 'key_down':
         const key = this.mapKey(action.key);
-        code += `${indent}await page.keyboard.press('${key}');\n`;
+        code += `${indent}await ${locatorCode}.press('${key}');\n`;
         break;
 
       case 'scroll':
         if (action.target === 'document') {
           code += `${indent}await page.evaluate(() => window.scrollTo(${action.position.x}, ${action.position.y}));\n`;
         } else {
-          code += `${indent}await page.locator('${this.generateSelector(action.target)}').scrollIntoViewIfNeeded();\n`;
+          code += `${indent}await ${locatorCode}.scrollIntoViewIfNeeded();\n`;
         }
         break;
 
       case 'hover':
-        code += `${indent}await page.hover('${this.generateSelector(action.target)}');\n`;
+        code += `${indent}await ${locatorCode}.hover();\n`;
         break;
 
       case 'drag-drop':
-        code += `${indent}await page.dragAndDrop('${this.generateSelector(action.source.element)}', '${this.generateSelector(action.target)}');\n`;
+        const sourceLocator = this.generateModernLocator(action.source.element);
+        const targetLocator = this.generateModernLocator(action.target);
+        code += `${indent}await ${sourceLocator}.dragTo(${targetLocator});\n`;
         break;
 
       case 'file_upload':
         const files = action.files.map(f => f.name).join(', ');
         code += `${indent}// Upload files: ${files}\n`;
-        code += `${indent}await page.setInputFiles('${this.generateSelector(action.target)}', ['path/to/${action.files[0].name}']);\n`;
+        code += `${indent}await ${locatorCode}.setInputFiles(['path/to/${action.files[0].name}']);\n`;
+        if (includeAssertions) {
+          code += `${indent}// Verify file was uploaded\n`;
+          code += `${indent}await expect(${locatorCode}).toHaveValue(/./);\n`;
+        }
         break;
 
       case 'navigate':
         code += `${indent}await page.goto('${action.url}', { waitUntil: 'networkidle' });\n`;
+        if (includeAssertions) {
+          code += `${indent}await expect(page).toHaveURL('${action.url}');\n`;
+        }
         break;
 
       case 'browser_back':
@@ -218,8 +244,11 @@ const fs = require('fs');
 
       case 'submit':
         code += `${indent}// Form submission\n`;
-        code += `${indent}await page.locator('${this.generateSelector(action.target)}').evaluate(form => form.submit());\n`;
+        code += `${indent}await ${locatorCode}.evaluate(form => form.submit());\n`;
         code += `${indent}await page.waitForLoadState('networkidle');\n`;
+        if (includeAssertions) {
+          code += `${indent}await expect(page).toHaveURL(/.*/); // Wait for post-submit navigation\n`;
+        }
         break;
     }
 
@@ -335,6 +364,68 @@ const fs = require('fs');
     if (target.attributes?.['data-testid']) return target.attributes['data-testid'];
     if (target.text) return target.text.toLowerCase().replace(/\s+/g, '_');
     return 'element';
+  }
+
+  /**
+   * Generate modern Playwright locator using semantic locators when possible
+   * Priority: getByRole > getByLabel > getByTestId > getByText > getByPlaceholder > locator
+   */
+  generateModernLocator(target) {
+    if (!target) return 'page.locator("body")';
+
+    // 1. getByRole (highest priority - most semantic)
+    if (target.attributes?.role) {
+      const role = target.attributes.role;
+      const name = target.attributes?.['aria-label'] || target.textContent;
+      if (name) {
+        return `page.getByRole('${role}', { name: '${this.sanitizeString(name)}' })`;
+      }
+      return `page.getByRole('${role}')`;
+    }
+
+    // 2. getByLabel (for form fields with labels)
+    if (target.attributes?.['aria-label']) {
+      return `page.getByLabel('${this.sanitizeString(target.attributes['aria-label'])}')`;
+    }
+
+    // Also check for associated <label> via for/id relationship
+    if (target.id && target.tagName && ['input', 'select', 'textarea'].includes(target.tagName.toLowerCase())) {
+      // This would require DOM traversal - skip for now
+    }
+
+    // 3. getByTestId (stable test identifiers)
+    if (target.attributes?.['data-testid']) {
+      return `page.getByTestId('${target.attributes['data-testid']}')`;
+    }
+
+    // 4. getByPlaceholder (for input fields)
+    if (target.attributes?.placeholder) {
+      return `page.getByPlaceholder('${this.sanitizeString(target.attributes.placeholder)}')`;
+    }
+
+    // 5. getByText (for elements with unique text)
+    if (target.textContent && target.textContent.trim().length > 0 && target.textContent.trim().length < 50) {
+      const text = this.sanitizeString(target.textContent.trim());
+      // Use exact match for short text
+      if (target.textContent.trim().length < 20) {
+        return `page.getByText('${text}', { exact: true })`;
+      }
+      return `page.getByText('${text}')`;
+    }
+
+    // 6. getByAltText (for images)
+    if (target.tagName === 'img' && target.attributes?.alt) {
+      return `page.getByAltText('${this.sanitizeString(target.attributes.alt)}')`;
+    }
+
+    // 7. getByTitle
+    if (target.attributes?.title) {
+      return `page.getByTitle('${this.sanitizeString(target.attributes.title)}')`;
+    }
+
+    // 8. Fallback to locator with CSS selector
+    const selector = this.generateSelector(target);
+    return `page.locator('${selector}')`;
   }
 
   generatePageObject(pageName, selectors) {
@@ -525,9 +616,11 @@ public class FlowScribeTest {
       code += this.generateJavaAssertions(action.assertions);
     }
 
-    // Add wait
+    // Add explicit wait if there's significant delay (instead of Thread.sleep)
     if (action.timeSinceLastAction > 1000) {
-      code += `${indent}Thread.sleep(${Math.min(action.timeSinceLastAction, 3000)});\n`;
+      const waitSeconds = Math.min(action.timeSinceLastAction / 1000, 3);
+      code += `${indent}// Wait ${waitSeconds}s for page to stabilize\n`;
+      code += `${indent}wait.until(ExpectedConditions.jsReturnsValue("return document.readyState === 'complete';"));\n`;
     }
 
     return code;
@@ -655,9 +748,11 @@ if __name__ == "__main__":
       code += this.generatePythonAssertions(action.assertions);
     }
 
-    // Add wait
+    // Add explicit wait if there's significant delay (instead of time.sleep)
     if (action.timeSinceLastAction > 1000) {
-      code += `${indent}time.sleep(${(action.timeSinceLastAction / 1000).toFixed(1)})\n`;
+      const waitSeconds = Math.min(action.timeSinceLastAction / 1000, 3);
+      code += `${indent}# Wait ${waitSeconds}s for page to stabilize\n`;
+      code += `${indent}self.wait.until(lambda d: d.execute_script("return document.readyState") === "complete")\n`;
     }
 
     return code;
@@ -739,9 +834,11 @@ const assert = require('assert');
         break;
     }
 
-    // Add wait
+    // Add explicit wait if there's significant delay (instead of driver.sleep)
     if (action.timeSinceLastAction > 1000) {
-      code += `${indent}await driver.sleep(${action.timeSinceLastAction});\n`;
+      const waitSeconds = Math.min(action.timeSinceLastAction / 1000, 3);
+      code += `${indent}// Wait ${waitSeconds}s for page to stabilize\n`;
+      code += `${indent}await driver.wait(until.elementLocated(By.css('body')), ${action.timeSinceLastAction});\n`;
     }
 
     return code;
@@ -844,9 +941,11 @@ public class FlowScribeTest
         break;
     }
 
-    // Add wait
+    // Add explicit wait if there's significant delay (instead of Thread.Sleep)
     if (action.timeSinceLastAction > 1000) {
-      code += `${indent}System.Threading.Thread.Sleep(${action.timeSinceLastAction});\n`;
+      const waitSeconds = Math.min(action.timeSinceLastAction / 1000, 3);
+      code += `${indent}// Wait ${waitSeconds}s for page to stabilize\n`;
+      code += `${indent}wait.Until(d => ((IJavaScriptExecutor)d).ExecuteScript("return document.readyState").Equals("complete"));\n`;
     }
 
     return code;

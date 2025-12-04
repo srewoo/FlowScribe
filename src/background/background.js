@@ -5,7 +5,8 @@
 class FlowScribeBackground {
   constructor() {
     this.sessions = new Map();
-    this.currentSessionId = null;
+    this.activeSessionsByTab = new Map(); // tabId -> sessionId mapping for multi-tab support
+    this.currentSessionId = null; // Keep for backwards compatibility
     this.aiService = null;
     this.selfHealingEngine = null;
     this.networkRecorder = null;
@@ -125,30 +126,564 @@ class FlowScribeBackground {
   }
 
   async initializeAI() {
-    // Create a mock AI service immediately to prevent null reference errors
+    // Service worker-compatible AI service using direct fetch calls
     this.aiService = {
-      isConfigured: () => false,
-      enhanceScript: async (actions, framework, options) => {
-        console.log('AI service unavailable - using template mode');
-        return null;
+      isConfigured: () => {
+        return this.settings.enableAI && this.settings.apiKey && this.settings.apiKey.length > 10;
+      },
+      enhanceScript: async (framework, actions, options) => {
+        return this.callAIProvider(framework, actions, options);
       },
       updateSettings: () => Promise.resolve(),
       loadSettings: () => Promise.resolve()
     };
 
-    try {
-      // Skip AI initialization in service worker context for now
-      // This prevents DOM-related errors during webpack module resolution
-      console.log('🤖 AI service: Using template mode (service worker context)');
-      return;
-      
-      // TODO: Implement AI service in a worker-compatible way
-      // The current implementation has DOM dependencies in the dependency chain
-      // that cause issues in the service worker context even with dynamic imports
-      
-    } catch (error) {
-      console.warn('AI service initialization error:', error.message || error);
+    console.log('🤖 AI service initialized (service worker compatible)');
+  }
+
+  /**
+   * Call AI provider directly using fetch (service worker compatible)
+   * Automatically handles chunking for large action sets
+   */
+  async callAIProvider(framework, actions, options = {}) {
+    if (!this.settings.enableAI || !this.settings.apiKey) {
+      console.log('⚠️ AI not configured - using template generation');
+      return null;
     }
+
+    const provider = this.settings.aiProvider || 'openai';
+    const model = this.settings.aiModel || 'gpt-4o';
+
+    try {
+      console.log(`🤖 Calling ${provider} (${model}) for script enhancement...`);
+      console.log(`📊 Processing ${actions.length} actions`);
+
+      // Check if we need batched processing for large recordings (>100 actions)
+      if (actions.length > 100) {
+        console.log('📊 Large recording detected - using chunked batch processing');
+        const batchedResult = await this.processActionsInBatches(framework, actions, options);
+        if (batchedResult) {
+          console.log('✅ Batched AI enhancement successful');
+          return batchedResult;
+        }
+      }
+
+      // Single call for smaller recordings
+      const prompt = this.buildAIPrompt(framework, actions, options);
+      const estimatedTokens = this.estimateTokens(prompt);
+      console.log(`📊 Estimated prompt tokens: ~${estimatedTokens}`);
+
+      let response;
+      switch (provider) {
+        case 'openai':
+          response = await this.callOpenAI(model, prompt);
+          break;
+        case 'anthropic':
+          response = await this.callAnthropic(model, prompt);
+          break;
+        case 'google':
+          response = await this.callGoogleAI(model, prompt);
+          break;
+        default:
+          console.warn(`Unknown AI provider: ${provider}`);
+          return null;
+      }
+
+      if (response) {
+        console.log('✅ AI enhancement successful');
+        return response;
+      }
+    } catch (error) {
+      console.error('❌ AI enhancement failed:', error.message);
+    }
+
+    return null;
+  }
+
+  /**
+   * Estimate token count for a string (rough approximation: ~4 chars per token)
+   */
+  estimateTokens(text) {
+    return Math.ceil(text.length / 4);
+  }
+
+  /**
+   * Compress action data to reduce token usage
+   */
+  compressAction(action) {
+    // Keep only essential fields for AI processing
+    const compressed = {
+      type: action.type,
+      timestamp: action.timestamp
+    };
+
+    if (action.url) compressed.url = action.url;
+    if (action.value) compressed.value = action.value;
+    if (action.key) compressed.key = action.key;
+
+    // Compress element data - keep only useful selector info
+    if (action.element) {
+      compressed.element = {};
+      if (action.element.id) compressed.element.id = action.element.id;
+      if (action.element.name) compressed.element.name = action.element.name;
+      if (action.element.tagName) compressed.element.tagName = action.element.tagName;
+      if (action.element.type) compressed.element.type = action.element.type;
+      if (action.element.placeholder) compressed.element.placeholder = action.element.placeholder;
+      if (action.element.textContent) {
+        compressed.element.text = action.element.textContent.substring(0, 50);
+      }
+      // Include test attributes if available
+      if (action.element.testAttributes && Object.keys(action.element.testAttributes).length > 0) {
+        compressed.element.testAttrs = action.element.testAttributes;
+      }
+      // Include best selector
+      if (action.element.cssSelector) {
+        compressed.element.selector = action.element.cssSelector;
+      }
+    }
+
+    return compressed;
+  }
+
+  /**
+   * Chunk actions into batches that fit within token limits
+   */
+  chunkActions(actions, maxTokensPerChunk = 3000) {
+    const chunks = [];
+    let currentChunk = [];
+    let currentTokens = 0;
+
+    for (const action of actions) {
+      const compressed = this.compressAction(action);
+      const actionJson = JSON.stringify(compressed);
+      const actionTokens = this.estimateTokens(actionJson);
+
+      // If single action exceeds limit, add it alone (will be truncated if needed)
+      if (actionTokens > maxTokensPerChunk) {
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk);
+          currentChunk = [];
+          currentTokens = 0;
+        }
+        chunks.push([compressed]);
+        continue;
+      }
+
+      // Check if adding this action would exceed the limit
+      if (currentTokens + actionTokens > maxTokensPerChunk) {
+        chunks.push(currentChunk);
+        currentChunk = [compressed];
+        currentTokens = actionTokens;
+      } else {
+        currentChunk.push(compressed);
+        currentTokens += actionTokens;
+      }
+    }
+
+    // Add remaining actions
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Build prompt for AI script generation with chunking support
+   */
+  buildAIPrompt(framework, actions, options, chunkInfo = null) {
+    // Compress actions to reduce token usage
+    const compressedActions = actions.map(a => this.compressAction(a));
+    const actionsJson = JSON.stringify(compressedActions, null, 2);
+
+    // Get the starting URL from first navigation or action
+    const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
+
+    let chunkContext = '';
+    if (chunkInfo) {
+      if (chunkInfo.current === 1) {
+        chunkContext = `\nThis is part ${chunkInfo.current} of ${chunkInfo.total}. Include ALL imports and test setup at the beginning.`;
+      } else if (chunkInfo.current === chunkInfo.total) {
+        chunkContext = `\nThis is part ${chunkInfo.current} of ${chunkInfo.total} (FINAL). Continue the test steps and include proper cleanup/teardown.`;
+      } else {
+        chunkContext = `\nThis is part ${chunkInfo.current} of ${chunkInfo.total}. Continue the test steps (no imports needed, no cleanup yet).`;
+      }
+    }
+
+    // Framework-specific templates
+    const frameworkTemplates = this.getFrameworkTemplate(framework);
+
+    return `You are an expert ${framework} test automation engineer. Generate a COMPLETE, READY-TO-RUN test script.
+
+## Framework: ${framework}
+## Starting URL: ${startUrl}
+## Total Actions: ${actions.length}${chunkContext}
+
+## CRITICAL REQUIREMENTS:
+1. Generate a COMPLETE script that runs without any modifications
+2. Include ALL necessary imports at the top of the file
+3. Convert EVERY action into corresponding test code - do not skip any action
+4. Use proper async/await syntax throughout
+5. Add explicit waits before interactions (waitForSelector, waitForLoadState, etc.)
+6. Include meaningful assertions after important actions (form submissions, navigation, clicks)
+
+## Selector Priority (use in this order):
+1. data-testid, data-test, data-cy, data-qa attributes
+2. id attribute (if not dynamic)
+3. name attribute (for form elements)
+4. aria-label or role attributes
+5. Stable CSS selectors (avoid nth-child when possible)
+6. Text content for buttons/links
+
+## ${framework.toUpperCase()} TEMPLATE TO FOLLOW:
+${frameworkTemplates}
+
+## Recorded Actions (convert ALL of these):
+${actionsJson}
+
+## Action Type Mapping:
+- "navigation" → goto() or visit()
+- "click" → click() with waitForSelector
+- "input" or "change" → fill() or type() with clear() first
+- "keydown" with Enter → press('Enter')
+- "submit" → click submit button or press Enter
+- "focus"/"blur" → typically skip unless needed for validation
+
+## OUTPUT RULES:
+- Output ONLY valid ${framework} code
+- NO markdown code blocks, NO explanations
+- NO placeholder comments like "// Add more steps here"
+- Script must be copy-paste ready to run
+- Include descriptive comments for each step`;
+  }
+
+  /**
+   * Get framework-specific code template
+   */
+  getFrameworkTemplate(framework) {
+    const templates = {
+      playwright: `
+import { test, expect } from '@playwright/test';
+
+test.describe('User Flow Test', () => {
+  test('should complete the recorded user journey', async ({ page }) => {
+    // Set default timeout
+    test.setTimeout(60000);
+
+    // Navigate to starting page
+    await page.goto('URL_HERE');
+    await page.waitForLoadState('networkidle');
+
+    // Step 1: Description
+    await page.locator('selector').click();
+    await expect(page.locator('selector')).toBeVisible();
+
+    // Continue with all steps...
+  });
+});`,
+
+      cypress: `
+describe('User Flow Test', () => {
+  beforeEach(() => {
+    cy.viewport(1280, 720);
+  });
+
+  it('should complete the recorded user journey', () => {
+    // Navigate to starting page
+    cy.visit('URL_HERE');
+
+    // Step 1: Description
+    cy.get('selector').should('be.visible').click();
+
+    // Continue with all steps...
+  });
+});`,
+
+      selenium: `
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+import time
+
+class TestUserFlow:
+    def setup_method(self):
+        options = Options()
+        options.add_argument('--start-maximized')
+        self.driver = webdriver.Chrome(options=options)
+        self.wait = WebDriverWait(self.driver, 10)
+
+    def teardown_method(self):
+        if self.driver:
+            self.driver.quit()
+
+    def test_user_journey(self):
+        # Navigate to starting page
+        self.driver.get('URL_HERE')
+
+        # Step 1: Description
+        element = self.wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'selector')))
+        element.click()
+
+        # Continue with all steps...`,
+
+      puppeteer: `
+const puppeteer = require('puppeteer');
+
+describe('User Flow Test', () => {
+  let browser;
+  let page;
+
+  beforeAll(async () => {
+    browser = await puppeteer.launch({
+      headless: false,
+      defaultViewport: { width: 1280, height: 720 }
+    });
+    page = await browser.newPage();
+    page.setDefaultTimeout(30000);
+  });
+
+  afterAll(async () => {
+    if (browser) {
+      await browser.close();
+    }
+  });
+
+  test('should complete the recorded user journey', async () => {
+    // Navigate to starting page
+    await page.goto('URL_HERE', { waitUntil: 'networkidle0' });
+
+    // Step 1: Description
+    await page.waitForSelector('selector');
+    await page.click('selector');
+
+    // Continue with all steps...
+  });
+});`
+    };
+
+    return templates[framework] || templates.playwright;
+  }
+
+  /**
+   * Process large action sets in batches
+   */
+  async processActionsInBatches(framework, actions, options) {
+    const MAX_ACTIONS_FOR_SINGLE_CALL = 100;
+    const MAX_TOKENS_PER_CHUNK = 10000;
+
+    // For small action sets, process in single call
+    if (actions.length <= MAX_ACTIONS_FOR_SINGLE_CALL) {
+      const prompt = this.buildAIPrompt(framework, actions, options);
+      const estimatedTokens = this.estimateTokens(prompt);
+      console.log(`📊 Single batch: ${actions.length} actions, ~${estimatedTokens} tokens`);
+      return null; // Let caller use single call
+    }
+
+    // For larger sets, chunk and batch process
+    console.log(`📊 Large recording: ${actions.length} actions - using chunked processing`);
+    const chunks = this.chunkActions(actions, MAX_TOKENS_PER_CHUNK);
+    console.log(`📊 Split into ${chunks.length} chunks`);
+
+    const scriptParts = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const chunkInfo = { current: i + 1, total: chunks.length };
+
+      console.log(`🔄 Processing chunk ${i + 1}/${chunks.length} (${chunk.length} actions)`);
+
+      const prompt = this.buildAIPrompt(framework, chunk, options, chunkInfo);
+
+      let result;
+      const provider = this.settings.aiProvider || 'openai';
+      const model = this.settings.aiModel || 'gpt-4o';
+
+      switch (provider) {
+        case 'openai':
+          result = await this.callOpenAI(model, prompt);
+          break;
+        case 'anthropic':
+          result = await this.callAnthropic(model, prompt);
+          break;
+        case 'google':
+          result = await this.callGoogleAI(model, prompt);
+          break;
+      }
+
+      if (result) {
+        scriptParts.push(result);
+      }
+
+      // Add small delay between API calls to avoid rate limiting
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    // Merge script parts
+    if (scriptParts.length > 0) {
+      return this.mergeScriptParts(framework, scriptParts);
+    }
+
+    return null;
+  }
+
+  /**
+   * Merge multiple script parts into a single coherent script
+   */
+  mergeScriptParts(framework, parts) {
+    if (parts.length === 1) return parts[0];
+
+    // Extract test body from each part and merge
+    const mergedSteps = [];
+    let imports = '';
+    let setup = '';
+    let cleanup = '';
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+
+      // For first part, extract imports and setup
+      if (i === 0) {
+        const lines = part.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('import ') || line.startsWith('const ') || line.startsWith('from ')) {
+            imports += line + '\n';
+          }
+        }
+      }
+
+      // Extract step comments and code
+      mergedSteps.push(`  // --- Chunk ${i + 1} ---`);
+
+      // Simple extraction: take lines that look like test steps
+      const lines = part.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        // Skip import/setup/cleanup lines for middle parts
+        if (i > 0 && (trimmed.startsWith('import ') || trimmed.startsWith('describe(') || trimmed.startsWith('test('))) {
+          continue;
+        }
+        if (i < parts.length - 1 && (trimmed.startsWith('});') || trimmed.includes('browser.close'))) {
+          continue;
+        }
+        if (trimmed && !trimmed.startsWith('import ')) {
+          mergedSteps.push(line);
+        }
+      }
+    }
+
+    return mergedSteps.join('\n');
+  }
+
+  /**
+   * Call OpenAI API
+   */
+  async callOpenAI(model, prompt) {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.settings.apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a test automation expert. Generate clean, production-ready test scripts.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 4000,
+        temperature: 0.3
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || null;
+  }
+
+  /**
+   * Call Anthropic API
+   */
+  async callAnthropic(model, prompt) {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.settings.apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: model || 'claude-3-sonnet-20240229',
+        max_tokens: 4000,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(`Anthropic API error: ${error.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.content?.[0]?.text?.trim() || null;
+  }
+
+  /**
+   * Call Google AI (Gemini) API
+   */
+  async callGoogleAI(model, prompt) {
+    const geminiModel = model || 'gemini-pro';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${this.settings.apiKey}`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: prompt
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 4000
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(`Google AI API error: ${error.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
   }
 
   setupMessageHandlers() {
@@ -166,7 +701,8 @@ class FlowScribeBackground {
           return true; // Keep channel open for async response
 
         case 'STOP_RECORDING_SESSION':
-          this.stopRecordingSession()
+          const stopTabId = message.data?.tabId || sender.tab?.id;
+          this.stopRecordingSession(stopTabId)
             .then(session => sendResponse({ success: true, session }))
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true;
@@ -189,13 +725,27 @@ class FlowScribeBackground {
           break;
 
         case 'CHECK_RECORDING_STATE':
-          const isRecording = this.currentSessionId && 
-            this.sessions.has(this.currentSessionId) &&
-            this.sessions.get(this.currentSessionId).status === 'recording';
-          sendResponse({ 
-            success: true, 
-            isRecording,
-            sessionId: this.currentSessionId,
+          // Tab-specific recording state check for multi-tab support
+          const checkTabId = sender.tab?.id;
+          let checkSessionId = null;
+          let checkIsRecording = false;
+
+          if (checkTabId && this.activeSessionsByTab.has(checkTabId)) {
+            checkSessionId = this.activeSessionsByTab.get(checkTabId);
+            const checkSession = this.sessions.get(checkSessionId);
+            checkIsRecording = checkSession && checkSession.status === 'recording';
+          } else if (this.currentSessionId) {
+            // Fallback to legacy single-session check
+            checkSessionId = this.currentSessionId;
+            const checkSession = this.sessions.get(this.currentSessionId);
+            checkIsRecording = checkSession && checkSession.status === 'recording' &&
+              (!checkSession.tabId || checkSession.tabId === checkTabId);
+          }
+
+          sendResponse({
+            success: true,
+            isRecording: checkIsRecording,
+            sessionId: checkSessionId,
             settings: this.settings
           });
           break;
@@ -330,10 +880,13 @@ class FlowScribeBackground {
   setupTabHandlers() {
     // Handle tab updates to track navigation and restore recording
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-      if (this.currentSessionId) {
-        const session = this.sessions.get(this.currentSessionId);
+      // Multi-tab support: look up session by tabId
+      const sessionId = this.activeSessionsByTab.get(tabId) || this.currentSessionId;
+
+      if (sessionId) {
+        const session = this.sessions.get(sessionId);
         if (session && session.tabId === tabId) {
-          
+
           // Track navigation (TEMPORARILY DISABLED FILTERING - record all navigations)
           if (changeInfo.url) {
             session.actions.push({
@@ -346,17 +899,17 @@ class FlowScribeBackground {
             });
             console.log('📍 Navigation recorded:', changeInfo.url);
           }
-          
+
           // Auto-restore recording after page loads
           if (changeInfo.status === 'complete' && session.status === 'recording') {
             console.log('🔄 Page loaded, restoring recording on:', tab.url);
-            
+
             // Wait for content script to initialize, then restore recording
             setTimeout(async () => {
               try {
                 await chrome.tabs.sendMessage(tabId, {
                   type: 'START_RECORDING',
-                  sessionId: this.currentSessionId,
+                  sessionId: sessionId,
                   settings: this.settings,
                   isRestore: true
                 });
@@ -367,7 +920,7 @@ class FlowScribeBackground {
                   try {
                     await chrome.tabs.sendMessage(tabId, {
                       type: 'START_RECORDING',
-                      sessionId: this.currentSessionId,
+                      sessionId: sessionId,
                       settings: this.settings,
                       isRestore: true
                     });
@@ -383,22 +936,36 @@ class FlowScribeBackground {
       }
     });
 
-    // Handle tab removal
+    // Handle tab removal - Multi-tab support
     chrome.tabs.onRemoved.addListener((tabId) => {
-      if (this.currentSessionId) {
+      // Check if tab has an active session
+      if (this.activeSessionsByTab.has(tabId)) {
+        this.stopRecordingSession(tabId);
+      } else if (this.currentSessionId) {
+        // Fallback for legacy single-session mode
         const session = this.sessions.get(this.currentSessionId);
         if (session && session.tabId === tabId) {
-          this.stopRecordingSession();
+          this.stopRecordingSession(tabId);
         }
       }
     });
   }
 
   async startRecordingSession(tabId, sessionData = {}) {
+    // Check if tab already has an active recording session
+    if (this.activeSessionsByTab.has(tabId)) {
+      const existingSessionId = this.activeSessionsByTab.get(tabId);
+      const existingSession = this.sessions.get(existingSessionId);
+      if (existingSession && existingSession.status === 'recording') {
+        console.warn(`Tab ${tabId} already has active session ${existingSessionId}`);
+        return existingSessionId; // Return existing session instead of creating new one
+      }
+    }
+
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
+
     const tab = await chrome.tabs.get(tabId);
-    
+
     const session = {
       id: sessionId,
       tabId: tabId,
@@ -411,7 +978,8 @@ class FlowScribeBackground {
     };
 
     this.sessions.set(sessionId, session);
-    this.currentSessionId = sessionId;
+    this.activeSessionsByTab.set(tabId, sessionId); // Multi-tab support: map tab to session
+    this.currentSessionId = sessionId; // Keep for backwards compatibility
 
     // Inject content script if not already present
     try {
@@ -437,12 +1005,21 @@ class FlowScribeBackground {
     return sessionId;
   }
 
-  async stopRecordingSession() {
-    if (!this.currentSessionId) {
+  async stopRecordingSession(tabId = null) {
+    // Multi-tab support: find session by tabId or fall back to currentSessionId
+    let sessionId = null;
+
+    if (tabId && this.activeSessionsByTab.has(tabId)) {
+      sessionId = this.activeSessionsByTab.get(tabId);
+    } else if (this.currentSessionId) {
+      sessionId = this.currentSessionId;
+    }
+
+    if (!sessionId) {
       throw new Error('No active recording session');
     }
 
-    const session = this.sessions.get(this.currentSessionId);
+    const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error('Session not found');
     }
@@ -480,7 +1057,14 @@ class FlowScribeBackground {
     await this.saveSessionHistory();
 
     const completedSession = { ...session };
-    this.currentSessionId = null;
+
+    // Multi-tab cleanup: remove from activeSessionsByTab
+    this.activeSessionsByTab.delete(session.tabId);
+
+    // Clear currentSessionId only if it matches
+    if (this.currentSessionId === sessionId) {
+      this.currentSessionId = null;
+    }
 
     // Stop visual indicator in content script
     try {
@@ -587,28 +1171,46 @@ class FlowScribeBackground {
   }
 
   handleSingleActionRecorded(message, tabId) {
-    if (!this.currentSessionId) return;
+    // Multi-tab support: look up session by tabId first
+    let sessionId = this.activeSessionsByTab.get(tabId);
 
-    const session = this.sessions.get(this.currentSessionId);
+    // Fallback to currentSessionId if tab-specific lookup fails
+    if (!sessionId) {
+      sessionId = this.currentSessionId;
+    }
+
+    if (!sessionId) return;
+
+    const session = this.sessions.get(sessionId);
     if (session && session.tabId === tabId) {
       session.actions.push(message.action);
       console.log('💾 Action stored in session:', {
         type: message.action.type,
         totalSessionActions: session.actions.length,
-        url: message.url
+        url: message.url,
+        sessionId: sessionId
       });
     }
   }
 
   handleActionsRecorded(message, tabId) {
-    if (!this.currentSessionId) return;
+    // Multi-tab support: look up session by tabId first
+    let sessionId = this.activeSessionsByTab.get(tabId);
 
-    const session = this.sessions.get(this.currentSessionId);
+    // Fallback to currentSessionId if tab-specific lookup fails
+    if (!sessionId) {
+      sessionId = this.currentSessionId;
+    }
+
+    if (!sessionId) return;
+
+    const session = this.sessions.get(sessionId);
     if (session && session.tabId === tabId) {
       session.actions.push(...message.actions);
       console.log('💾 Multiple actions stored in session:', {
         newActions: message.actions.length,
-        totalSessionActions: session.actions.length
+        totalSessionActions: session.actions.length,
+        sessionId: sessionId
       });
     }
   }
@@ -625,8 +1227,9 @@ class FlowScribeBackground {
     // Try AI enhancement if enabled and configured
     if (this.settings.enableAI && this.settings.apiKey && options.useAI !== false) {
       try {
-        console.log('🤖 ATTEMPTING LLM GENERATION - Requesting AI enhancement from popup context...');
-        const enhancedScript = await this.requestAIEnhancement(framework, actions, options);
+        console.log('🤖 ATTEMPTING LLM GENERATION - Using direct AI service...');
+        // Use the service worker-compatible AI service directly
+        const enhancedScript = await this.callAIProvider(framework, actions, options);
         if (enhancedScript) {
           console.log('✅ SUCCESS: Script generated using LLM (AI-Enhanced)');
           console.log('🎯 LLM Script Preview:', enhancedScript.substring(0, 200) + '...');
@@ -1275,6 +1878,7 @@ class FlowScribeBackground {
 
   clearSessions() {
     this.sessions.clear();
+    this.activeSessionsByTab.clear();
     this.currentSessionId = null;
   }
 }

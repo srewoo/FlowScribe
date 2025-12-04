@@ -23,6 +23,55 @@ class SelfHealingEngine {
   async init(aiService) {
     this.aiService = aiService;
     await this.loadHealingHistory();
+    await this.optimizeStrategyOrder();
+  }
+
+  /**
+   * Learn from healing history and optimize strategy order
+   */
+  async optimizeStrategyOrder() {
+    if (this.healingHistory.length < 5) {
+      return; // Not enough data to optimize
+    }
+
+    // Calculate success rate for each strategy
+    const strategyStats = {};
+
+    this.healingHistory.forEach(record => {
+      if (!strategyStats[record.strategy]) {
+        strategyStats[record.strategy] = {
+          successes: 0,
+          totalConfidence: 0
+        };
+      }
+      strategyStats[record.strategy].successes++;
+      strategyStats[record.strategy].totalConfidence += record.confidence;
+    });
+
+    // Calculate average confidence per strategy
+    const strategyScores = Object.keys(strategyStats).map(strategy => ({
+      strategy,
+      score: strategyStats[strategy].totalConfidence / strategyStats[strategy].successes,
+      count: strategyStats[strategy].successes
+    }));
+
+    // Sort strategies by score (higher = better)
+    strategyScores.sort((a, b) => b.score - a.score);
+
+    // Reorder healing strategies based on learned performance
+    const optimizedOrder = strategyScores.map(s => s.strategy);
+
+    // Add any strategies not in history at the end
+    this.healingStrategies.forEach(strategy => {
+      if (!optimizedOrder.includes(strategy)) {
+        optimizedOrder.push(strategy);
+      }
+    });
+
+    this.healingStrategies = optimizedOrder;
+
+    console.log('🧠 Self-healing strategies optimized based on history:',
+      strategyScores.map(s => `${s.strategy}: ${s.score.toFixed(2)} (${s.count} uses)`));
   }
 
   /**
@@ -155,15 +204,41 @@ class SelfHealingEngine {
       return null;
     }
 
+    // Service worker compatibility check
+    if (typeof document === 'undefined') {
+      return null;
+    }
+
+    // Build DOM context - collect relevant elements
+    const domContext = this.buildDOMContext(attributes);
+
     const prompt = `
-    Find a CSS selector for an element that was previously: "${selector}"
-    Target text: "${targetText}"
-    Target attributes: ${JSON.stringify(attributes)}
-    
-    Available elements on current page: [DOM_CONTEXT]
-    
-    Return ONLY the best CSS selector that matches the intended element.
-    `;
+You are a test automation expert helping to heal a broken CSS selector.
+
+ORIGINAL SELECTOR (now broken): "${selector}"
+TARGET ELEMENT CHARACTERISTICS:
+- Text content: "${targetText || 'N/A'}"
+- Attributes: ${JSON.stringify(attributes, null, 2)}
+
+CURRENT PAGE ELEMENTS (potential matches):
+${domContext}
+
+TASK:
+1. Analyze the target element characteristics
+2. Find the best matching element from the current page
+3. Generate a stable, unique CSS selector for it
+
+REQUIREMENTS:
+- Prefer data-testid, id, or semantic attributes
+- Avoid auto-generated class names (e.g., css-xyz123)
+- Ensure selector uniqueness (should match only 1 element)
+- Keep selector as simple as possible
+
+Return ONLY the CSS selector, nothing else.
+Example: #login-btn
+Example: [data-testid="submit-button"]
+Example: button[aria-label="Sign In"]
+    `.trim();
 
     try {
       const response = await this.aiService.generateSelectorHealing(prompt);
@@ -172,6 +247,71 @@ class SelfHealingEngine {
       console.warn('AI semantic healing failed:', error);
       return null;
     }
+  }
+
+  buildDOMContext(targetAttributes) {
+    // Build a list of potentially matching elements on the page
+    const elements = [];
+    const maxElements = 20; // Limit to avoid huge prompts
+
+    try {
+      // Collect elements with similar attributes
+      const selectors = [
+        targetAttributes.tagName ? targetAttributes.tagName.toLowerCase() : 'button,a,input',
+        '[data-testid]',
+        '[id]',
+        '[aria-label]',
+        '[role]'
+      ];
+
+      const seen = new Set();
+
+      selectors.forEach(selector => {
+        try {
+          const foundElements = document.querySelectorAll(selector);
+          Array.from(foundElements).slice(0, maxElements - elements.length).forEach(el => {
+            const key = this.getElementKey(el);
+            if (!seen.has(key)) {
+              seen.add(key);
+              elements.push(this.describeElement(el));
+            }
+          });
+        } catch (e) {
+          // Ignore invalid selectors
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to build DOM context:', error);
+    }
+
+    if (elements.length === 0) {
+      return '(No matching elements found on page)';
+    }
+
+    return elements.slice(0, maxElements).join('\n');
+  }
+
+  getElementKey(element) {
+    // Generate unique key for element to avoid duplicates
+    return `${element.tagName}-${element.id}-${element.className}-${element.textContent?.substring(0, 20)}`;
+  }
+
+  describeElement(element) {
+    // Create human-readable description of element
+    const parts = [];
+
+    parts.push(`- ${element.tagName.toLowerCase()}`);
+
+    if (element.id) parts.push(`#${element.id}`);
+    if (element.getAttribute('data-testid')) parts.push(`[data-testid="${element.getAttribute('data-testid')}"]`);
+    if (element.className) parts.push(`.${element.className.split(' ')[0]}`);
+    if (element.getAttribute('aria-label')) parts.push(`aria-label="${element.getAttribute('aria-label')}"`);
+    if (element.getAttribute('role')) parts.push(`role="${element.getAttribute('role')}"`);
+
+    const text = element.textContent?.trim().substring(0, 30);
+    if (text) parts.push(`text="${text}${element.textContent.length > 30 ? '...' : ''}"`);
+
+    return parts.join(' ');
   }
 
   /**
@@ -406,18 +546,122 @@ class SelfHealingEngine {
   }
 
   extractStructuralPatterns(selector) {
-    // Implementation for extracting structural patterns
-    return [selector]; // Simplified for now
+    // Extract parent-child hierarchy patterns from selector
+    const patterns = [];
+
+    // Split by combinators (>, +, ~, space)
+    const parts = selector.split(/([>+~\s]+)/).filter(p => p.trim());
+
+    // Generate patterns at different levels of specificity
+    for (let i = 0; i < parts.length; i++) {
+      // Full pattern from this point
+      const fullPattern = parts.slice(i).join('');
+      if (fullPattern && !fullPattern.match(/^[>+~\s]+$/)) {
+        patterns.push({
+          selector: fullPattern,
+          specificity: parts.length - i,
+          depth: i
+        });
+      }
+
+      // Partial patterns (skip intermediate elements)
+      if (i < parts.length - 1) {
+        const skipPattern = parts[i] + ' ' + parts[parts.length - 1];
+        patterns.push({
+          selector: skipPattern,
+          specificity: 2,
+          depth: i,
+          isPartial: true
+        });
+      }
+    }
+
+    // Extract parent patterns (everything except last element)
+    if (parts.length > 1) {
+      const parentPattern = parts.slice(0, -1).join('');
+      if (parentPattern && !parentPattern.match(/^[>+~\s]+$/)) {
+        patterns.push({
+          selector: parentPattern,
+          specificity: parts.length - 1,
+          depth: 0,
+          isParent: true
+        });
+      }
+    }
+
+    // Sort by specificity (higher = better)
+    return patterns.sort((a, b) => b.specificity - a.specificity);
   }
 
   findElementsByStructuralPattern(pattern, dom) {
-    // Implementation for finding elements by structural pattern
-    return []; // Simplified for now
+    // Service worker compatibility check
+    if (typeof document === 'undefined') {
+      return [];
+    }
+
+    try {
+      const selector = pattern.selector || pattern;
+      const elements = document.querySelectorAll(selector);
+
+      // Convert NodeList to Array and return
+      return Array.from(elements);
+    } catch (error) {
+      console.warn(`Failed to find elements by pattern "${pattern.selector || pattern}":`, error.message);
+      return [];
+    }
   }
 
   matchesAttributeProfile(element, attributes) {
-    // Implementation for matching attribute profiles
-    return true; // Simplified for now
+    if (!element || !attributes) return false;
+
+    // Priority attributes (weighted scoring)
+    const attributeWeights = {
+      'data-testid': 1.0,    // Highest priority
+      'id': 0.9,
+      'name': 0.8,
+      'role': 0.8,
+      'aria-label': 0.7,
+      'type': 0.6,
+      'placeholder': 0.5,
+      'title': 0.5,
+      'class': 0.3,          // Lowest priority (often dynamic)
+      'href': 0.7,
+      'alt': 0.6
+    };
+
+    let totalWeight = 0;
+    let matchedWeight = 0;
+
+    // Check each attribute
+    for (const [attr, value] of Object.entries(attributes)) {
+      const weight = attributeWeights[attr] || 0.2; // Default weight for unknown attributes
+      totalWeight += weight;
+
+      const elementValue = element.getAttribute ? element.getAttribute(attr) : element[attr];
+
+      if (elementValue) {
+        // Exact match
+        if (elementValue === value) {
+          matchedWeight += weight;
+        }
+        // Partial match for class and similar attributes
+        else if (attr === 'class' && elementValue.includes(value)) {
+          matchedWeight += weight * 0.5;
+        }
+        // Partial match for text-based attributes
+        else if (typeof value === 'string' && typeof elementValue === 'string' &&
+                 value.length > 3 && elementValue.includes(value)) {
+          matchedWeight += weight * 0.3;
+        }
+      }
+    }
+
+    // Calculate match percentage
+    if (totalWeight === 0) return false;
+    const matchPercentage = matchedWeight / totalWeight;
+
+    // Require at least 50% attribute match
+    return matchPercentage >= 0.5;
   }
 
   generateSelectorForElement(element) {
@@ -431,9 +675,63 @@ class SelfHealingEngine {
   }
 
   xpathToCSS(xpath) {
-    // Convert simple XPath to CSS selector
-    // This is a simplified implementation
-    return null;
+    if (!xpath) return null;
+
+    try {
+      // Handle simple XPath expressions
+      let css = xpath;
+
+      // Convert //* to *
+      css = css.replace(/\/\/\*/g, '*');
+
+      // Convert //tagname to tagname
+      css = css.replace(/\/\/([a-zA-Z]+)/g, '$1');
+
+      // Convert /tagname to tagname
+      css = css.replace(/\/([a-zA-Z]+)/g, ' $1').trim();
+
+      // Convert [@id="value"] to #value
+      css = css.replace(/\[@id=['"]([^'"]+)['"]\]/g, '#$1');
+
+      // Convert [@class="value"] to .value
+      css = css.replace(/\[@class=['"]([^'"]+)['"]\]/g, '.$1');
+
+      // Convert [@attribute="value"] to [attribute="value"]
+      css = css.replace(/\[@([^=]+)=['"]([^'"]+)['"]\]/g, '[$1="$2"]');
+
+      // Convert [@attribute] to [attribute]
+      css = css.replace(/\[@([^\]]+)\]/g, '[$1]');
+
+      // Convert [contains(@class, "value")] to [class*="value"]
+      css = css.replace(/\[contains\(@([^,]+),\s*['"]([^'"]+)['"]\)\]/g, '[$1*="$2"]');
+
+      // Convert [contains(text(), "value")] to :contains("value")
+      // Note: :contains is not standard CSS, but works in many libraries
+      css = css.replace(/\[contains\(text\(\),\s*['"]([^'"]+)['"]\)\]/g, ':contains("$1")');
+
+      // Convert [text()="value"] - this needs a workaround
+      // We can't directly convert this to CSS, return null for complex cases
+      if (css.includes('text()')) {
+        return null; // Cannot convert text() XPath to CSS
+      }
+
+      // Convert position predicates [1] to :first-child (approximate)
+      css = css.replace(/\[1\]/g, ':first-child');
+      css = css.replace(/\[(\d+)\]/g, ':nth-child($1)');
+
+      // Clean up multiple spaces
+      css = css.replace(/\s+/g, ' ').trim();
+
+      // Validate the result looks like CSS
+      if (css && !css.includes('//') && !css.includes('@')) {
+        return css;
+      }
+
+      return null; // Return null for complex XPath that can't be converted
+    } catch (error) {
+      console.warn('XPath to CSS conversion failed:', error);
+      return null;
+    }
   }
 
   extractSelectorFromAIResponse(response) {

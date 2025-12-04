@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <title>FlowScribe</title>
     <link rel="stylesheet" href="popup.css">
+    <!-- Prism.js for syntax highlighting (local) -->
+    <link rel="stylesheet" href="lib/prism.min.css">
+    <link rel="stylesheet" href="lib/prism-line-numbers.min.css">
 </head>
 <body>
     <div class="container">
@@ -80,6 +83,28 @@
             </button>
         </div>
 
+        <!-- Actions List Panel -->
+        <div class="actions-panel" id="actionsPanel" style="display: none;">
+            <div class="actions-header">
+                <div class="actions-title">
+                    <h4>Recorded Actions</h4>
+                    <span class="action-count" id="actionListCount">0</span>
+                </div>
+                <div class="actions-toolbar">
+                    <button class="btn-icon-only" id="toggleActionsBtn" title="Collapse">▼</button>
+                    <button class="btn-icon-only" id="clearActionsBtn" title="Clear All">🗑️</button>
+                </div>
+            </div>
+            <div class="actions-body" id="actionsBody">
+                <ul class="actions-list" id="actionsList">
+                    <!-- Actions will be populated dynamically -->
+                </ul>
+                <div class="actions-empty" id="actionsEmpty">
+                    <p>No actions recorded yet</p>
+                    <small>Start recording to capture user interactions</small>
+                </div>
+            </div>
+        </div>
 
         <!-- Settings Modal -->
         <div class="modal-overlay" id="settingsModal" style="display: none;">
@@ -159,10 +184,10 @@
                             <label>Platform:</label>
                             <select id="cicdPlatform">
                                 <option value="github-actions">GitHub Actions</option>
-                                <option value="gitlab-ci">GitLab CI (Coming Soon)</option>
-                                <option value="jenkins">Jenkins (Coming Soon)</option>
-                                <option value="azure-devops">Azure DevOps (Coming Soon)</option>
-                                <option value="circleci">CircleCI (Coming Soon)</option>
+                                <option value="gitlab-ci">GitLab CI</option>
+                                <option value="jenkins">Jenkins</option>
+                                <option value="azure-devops">Azure DevOps</option>
+                                <option value="circleci">CircleCI</option>
                             </select>
                         </div>
                     </div>
@@ -186,7 +211,7 @@
                     </div>
                 </div>
                 <div class="modal-content">
-                    <pre class="script-content" id="scriptContent"></pre>
+                    <pre class="script-content line-numbers"><code class="language-javascript" id="scriptContent"></code></pre>
                 </div>
                 <div class="modal-footer">
                     <div class="export-options" id="exportOptions" style="display: none;">
@@ -212,7 +237,7 @@
         
         <!-- Footer -->
         <div class="footer">
-            <span class="version">v1.0.0</span>
+            <span class="version">v2.0.0</span>
             <div class="footer-links">
                 <a href="#" id="helpLink" class="footer-link">📖 Help</a>
                 <span class="footer-separator">•</span>
@@ -221,6 +246,14 @@
         </div>
     </div>
 
+    <!-- Prism.js for syntax highlighting (local) -->
+    <script src="lib/prism.min.js"></script>
+    <script src="lib/prism-javascript.min.js"></script>
+    <script src="lib/prism-typescript.min.js"></script>
+    <script src="lib/prism-python.min.js"></script>
+    <script src="lib/prism-java.min.js"></script>
+    <script src="lib/prism-csharp.min.js"></script>
+    <script src="lib/prism-line-numbers.min.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

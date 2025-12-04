@@ -9,6 +9,7 @@ class FlowScribeUI {
     this.currentSession = null;
     this.actions = [];
     this.selectedFramework = 'playwright';
+    this.generatedScriptContent = null; // Store generated script for export
     this.settings = {};
     this.recordingStartTime = null;
     
@@ -93,6 +94,15 @@ class FlowScribeUI {
     this.exportOptionsBtn = document.getElementById('exportOptionsBtn');
     this.exportOptions = document.getElementById('exportOptions');
 
+    // Actions list elements
+    this.actionsPanel = document.getElementById('actionsPanel');
+    this.actionsList = document.getElementById('actionsList');
+    this.actionsEmpty = document.getElementById('actionsEmpty');
+    this.actionListCount = document.getElementById('actionListCount');
+    this.actionsBody = document.getElementById('actionsBody');
+    this.toggleActionsBtn = document.getElementById('toggleActionsBtn');
+    this.clearActionsBtn = document.getElementById('clearActionsBtn');
+
     // UI elements
     this.toast = document.getElementById('toast');
     this.toastMessage = document.getElementById('toastMessage');
@@ -144,6 +154,10 @@ class FlowScribeUI {
         this.exportScript(exportType);
       });
     });
+
+    // Actions list events
+    this.toggleActionsBtn.addEventListener('click', () => this.toggleActionsList());
+    this.clearActionsBtn.addEventListener('click', () => this.clearActionsList());
 
     // Footer links
     this.helpLink.addEventListener('click', (e) => {
@@ -292,6 +306,7 @@ class FlowScribeUI {
     this.updateStats();
     this.updateButtons();
     this.updateSessionCard();
+    this.updateActionsList();
   }
 
   updateStatus() {
@@ -545,8 +560,50 @@ class FlowScribeUI {
   }
 
   displayScript(script) {
+    // Store the generated script for export
+    this.generatedScriptContent = script;
+
+    // Detect language based on framework
+    const language = this.getLanguageForFramework(this.selectedFramework);
+
+    // Set the script content
     this.scriptContent.textContent = script;
+
+    // Update language class for Prism.js
+    this.scriptContent.className = `language-${language}`;
+    this.scriptContent.parentElement.className = `script-content line-numbers language-${language}`;
+
+    // Apply syntax highlighting
+    if (window.Prism) {
+      Prism.highlightElement(this.scriptContent);
+    }
+
+    // Show modal
     this.scriptModal.style.display = 'flex';
+  }
+
+  getLanguageForFramework(framework) {
+    // Map framework to programming language for syntax highlighting
+    const languageMap = {
+      playwright: 'javascript',
+      selenium: 'java', // Default Selenium to Java
+      cypress: 'javascript',
+      puppeteer: 'javascript'
+    };
+
+    // Check if user has selected a specific language in settings
+    // (For Selenium which supports multiple languages)
+    if (framework === 'selenium' && this.settings.seleniumLanguage) {
+      const langMap = {
+        java: 'java',
+        python: 'python',
+        javascript: 'javascript',
+        csharp: 'csharp'
+      };
+      return langMap[this.settings.seleniumLanguage] || 'java';
+    }
+
+    return languageMap[framework] || 'javascript';
   }
 
   async copyScript() {
@@ -575,6 +632,30 @@ class FlowScribeUI {
         throw new Error('No framework selected. Please select a framework first.');
       }
 
+      // Use the already generated script if available (for "Script Only")
+      if (exportType === 'script' && this.generatedScriptContent) {
+        const filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
+        this.downloadFile(this.generatedScriptContent, filename, 'text/plain');
+        this.hideLoading();
+        this.showToast(`💾 Script exported!`, 'success');
+        this.toggleExportOptions();
+        return;
+      }
+
+      // Check if we have actions to export
+      if (!this.actions || this.actions.length === 0) {
+        // Try to get script content from the modal if displayed
+        if (this.generatedScriptContent) {
+          const filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
+          this.downloadFile(this.generatedScriptContent, filename, 'text/plain');
+          this.hideLoading();
+          this.showToast(`💾 Script exported!`, 'success');
+          this.toggleExportOptions();
+          return;
+        }
+        throw new Error('No actions recorded. Please record some actions first.');
+      }
+
       const options = {
         includePOM: exportType === 'pom' || exportType === 'full',
         includeCICD: exportType === 'cicd' || exportType === 'full',
@@ -594,6 +675,7 @@ class FlowScribeUI {
           data: {
             sessionId: this.currentSession?.id,
             framework: this.selectedFramework,
+            actions: this.actions, // Include actions directly
             format: 'json',
             options
           }
@@ -614,14 +696,14 @@ class FlowScribeUI {
 
       // Handle different response formats
       let content, filename, mimeType;
-      
+
       if (response.script) {
         // Script generation response
         content = response.script;
         filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
         mimeType = 'text/plain';
       } else if (response.data || response.exportData) {
-        // Session export response  
+        // Session export response
         const exportData = response.data || response.exportData;
         content = JSON.stringify(exportData, null, 2);
         filename = `flowscribe-export-${Date.now()}.json`;
@@ -630,17 +712,7 @@ class FlowScribeUI {
         throw new Error('No export data received from background script');
       }
 
-      // Create download
-      const blob = new Blob([content], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
+      this.downloadFile(content, filename, mimeType);
       this.hideLoading();
       this.showToast(`💾 ${exportType} package exported!`, 'success');
       this.toggleExportOptions(); // Hide options
@@ -650,6 +722,21 @@ class FlowScribeUI {
       this.showToast(`Export failed: ${error.message}`, 'error');
       console.error('Export failed:', error);
     }
+  }
+
+  /**
+   * Helper function to download a file
+   */
+  downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   toggleExportOptions() {
@@ -901,6 +988,190 @@ class FlowScribeUI {
       puppeteer: 'js'
     };
     return extensions[framework] || 'txt';
+  }
+
+  // ===== Actions List Management =====
+
+  updateActionsList() {
+    // Show/hide panel based on actions
+    if (this.actions.length > 0) {
+      this.actionsPanel.style.display = 'block';
+      this.actionsEmpty.style.display = 'none';
+      this.actionsList.style.display = 'block';
+    } else {
+      this.actionsPanel.style.display = 'none';
+      this.actionsEmpty.style.display = 'block';
+      this.actionsList.style.display = 'none';
+    }
+
+    // Update count
+    this.actionListCount.textContent = this.actions.length;
+
+    // Render action items
+    this.renderActionItems();
+  }
+
+  renderActionItems() {
+    this.actionsList.innerHTML = '';
+
+    this.actions.forEach((action, index) => {
+      const li = document.createElement('li');
+      li.className = 'action-item';
+      li.setAttribute('data-index', index);
+      li.setAttribute('data-type', action.type);
+      li.draggable = true;
+
+      const description = this.getActionDescription(action);
+      const value = action.value ? `Value: ${action.value.substring(0, 30)}${action.value.length > 30 ? '...' : ''}` : '';
+
+      li.innerHTML = `
+        <div class="action-number">${index + 1}</div>
+        <div class="action-icon"></div>
+        <div class="action-details">
+          <div class="action-type">${action.type}</div>
+          <div class="action-description">${description}</div>
+          ${value ? `<div class="action-value">${value}</div>` : ''}
+        </div>
+        <div class="action-controls">
+          <button class="action-btn delete" data-index="${index}" title="Delete">🗑️</button>
+        </div>
+      `;
+
+      // Add event listeners
+      li.querySelector('.action-btn.delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteAction(index);
+      });
+
+      // Drag and drop listeners
+      li.addEventListener('dragstart', (e) => this.handleDragStart(e, index));
+      li.addEventListener('dragover', (e) => this.handleDragOver(e));
+      li.addEventListener('drop', (e) => this.handleDrop(e, index));
+      li.addEventListener('dragend', (e) => this.handleDragEnd(e));
+
+      this.actionsList.appendChild(li);
+    });
+  }
+
+  getActionDescription(action) {
+    const element = action.element || action.target;
+    const elementDesc = this.getElementDescription(element);
+
+    switch (action.type) {
+      case 'click':
+        return `Click on ${elementDesc}`;
+      case 'input':
+        return `Type into ${elementDesc}`;
+      case 'change':
+        return `Select option in ${elementDesc}`;
+      case 'navigate':
+        return `Navigate to ${this.formatUrl(action.url)}`;
+      case 'scroll':
+        return `Scroll on page`;
+      case 'hover':
+        return `Hover over ${elementDesc}`;
+      case 'submit':
+        return `Submit form`;
+      case 'select':
+        return `Select ${elementDesc}`;
+      default:
+        return `${action.type} action`;
+    }
+  }
+
+  getElementDescription(element) {
+    if (!element) return 'element';
+
+    if (element.textContent && element.textContent.trim()) {
+      return `"${element.textContent.trim().substring(0, 25)}${element.textContent.length > 25 ? '...' : ''}"`;
+    }
+    if (element.placeholder) {
+      return `[${element.placeholder}]`;
+    }
+    if (element.id) {
+      return `#${element.id}`;
+    }
+    if (element.tagName) {
+      return element.tagName.toLowerCase();
+    }
+    return 'element';
+  }
+
+  formatUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.pathname === '/' ? urlObj.hostname : `${urlObj.hostname}${urlObj.pathname}`;
+    } catch {
+      return url;
+    }
+  }
+
+  toggleActionsList() {
+    this.actionsBody.classList.toggle('collapsed');
+    this.toggleActionsBtn.textContent = this.actionsBody.classList.contains('collapsed') ? '▶' : '▼';
+  }
+
+  clearActionsList() {
+    if (confirm('Are you sure you want to clear all recorded actions?')) {
+      this.actions = [];
+      chrome.runtime.sendMessage({ type: 'CLEAR_ACTIONS' });
+      this.updateUI();
+      this.showToast('All actions cleared', 'success');
+    }
+  }
+
+  deleteAction(index) {
+    this.actions.splice(index, 1);
+    chrome.runtime.sendMessage({
+      type: 'UPDATE_ACTIONS',
+      actions: this.actions
+    });
+    this.updateUI();
+    this.showToast('Action deleted', 'success');
+  }
+
+  // Drag and drop handlers
+  handleDragStart(e, index) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/html', index);
+    e.target.classList.add('dragging');
+  }
+
+  handleDragOver(e) {
+    if (e.preventDefault) {
+      e.preventDefault();
+    }
+    e.dataTransfer.dropEffect = 'move';
+    return false;
+  }
+
+  handleDrop(e, targetIndex) {
+    if (e.stopPropagation) {
+      e.stopPropagation();
+    }
+
+    const sourceIndex = parseInt(e.dataTransfer.getData('text/html'));
+
+    if (sourceIndex !== targetIndex) {
+      // Reorder actions array
+      const [removed] = this.actions.splice(sourceIndex, 1);
+      this.actions.splice(targetIndex, 0, removed);
+
+      // Update backend
+      chrome.runtime.sendMessage({
+        type: 'UPDATE_ACTIONS',
+        actions: this.actions
+      });
+
+      this.updateUI();
+      this.showToast('Actions reordered', 'success');
+    }
+
+    return false;
+  }
+
+  handleDragEnd(e) {
+    e.target.classList.remove('dragging');
   }
 }
 

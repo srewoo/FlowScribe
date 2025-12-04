@@ -54,15 +54,15 @@ html, body {
   line-height: 1.5;
   color: var(--gray-800);
   background: var(--gray-50);
-  width: 500px;
-  min-height: 625px;
+  width: 400px;
+  min-height: 500px;
   overflow-x: hidden;
 }
 
 .container {
   display: flex;
   flex-direction: column;
-  min-height: 625px;
+  min-height: 500px;
   background: var(--white);
   width: 100%;
 }

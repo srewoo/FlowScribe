@@ -53,6 +53,10 @@ module.exports = {
           to: 'popup.css'
         },
         {
+          from: 'src/popup/lib',
+          to: 'lib'
+        },
+        {
           from: 'src/icons',
           to: 'icons'
         },

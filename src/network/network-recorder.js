@@ -602,6 +602,372 @@ class NetworkRecorder {
   updateCaptureSettings(newSettings) {
     this.captureSettings = { ...this.captureSettings, ...newSettings };
   }
+
+  // ===== GraphQL Detection =====
+
+  /**
+   * Detect if a request is a GraphQL request
+   */
+  isGraphQLRequest(request) {
+    if (!request) return false;
+
+    // Check URL contains /graphql
+    if (request.url && request.url.includes('/graphql')) {
+      return true;
+    }
+
+    // Check Content-Type header
+    if (request.requestHeaders) {
+      const contentType = request.requestHeaders['content-type'] || request.requestHeaders['Content-Type'];
+      if (contentType && contentType.includes('application/graphql')) {
+        return true;
+      }
+    }
+
+    // Check if POST request with GraphQL payload pattern
+    if (request.method === 'POST' && request.requestBody) {
+      try {
+        const body = typeof request.requestBody === 'string'
+          ? JSON.parse(request.requestBody)
+          : request.requestBody;
+
+        // GraphQL requests typically have 'query' or 'mutation' fields
+        if (body && (body.query || body.mutation || body.operationName)) {
+          return true;
+        }
+      } catch (e) {
+        // Not valid JSON, not GraphQL
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Parse GraphQL operation from request
+   */
+  parseGraphQLOperation(request) {
+    if (!this.isGraphQLRequest(request)) {
+      return null;
+    }
+
+    const operation = {
+      type: 'graphql',
+      url: request.url,
+      method: request.method,
+      timestamp: request.timestamp
+    };
+
+    try {
+      // Try to extract query/mutation details
+      if (request.requestBody) {
+        const body = typeof request.requestBody === 'string'
+          ? JSON.parse(request.requestBody)
+          : request.requestBody;
+
+        if (body.query) {
+          operation.query = body.query;
+          operation.operationType = this.detectGraphQLOperationType(body.query);
+          operation.operationName = body.operationName || this.extractGraphQLOperationName(body.query);
+          operation.variables = body.variables;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse GraphQL operation:', e);
+    }
+
+    return operation;
+  }
+
+  /**
+   * Detect GraphQL operation type (query, mutation, subscription)
+   */
+  detectGraphQLOperationType(queryString) {
+    if (!queryString) return 'unknown';
+
+    const trimmed = queryString.trim().toLowerCase();
+
+    if (trimmed.startsWith('query')) return 'query';
+    if (trimmed.startsWith('mutation')) return 'mutation';
+    if (trimmed.startsWith('subscription')) return 'subscription';
+
+    // If no keyword, it's likely a query (default)
+    if (trimmed.startsWith('{')) return 'query';
+
+    return 'unknown';
+  }
+
+  /**
+   * Extract operation name from GraphQL query
+   */
+  extractGraphQLOperationName(queryString) {
+    if (!queryString) return null;
+
+    // Match pattern: query OperationName or mutation OperationName
+    const match = queryString.match(/(?:query|mutation|subscription)\s+(\w+)/);
+    if (match && match[1]) {
+      return match[1];
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate GraphQL mock/stub code for tests
+   */
+  generateGraphQLMock(operation, framework = 'playwright') {
+    if (!operation || operation.type !== 'graphql') return '';
+
+    const mocks = {
+      playwright: `
+// Mock GraphQL ${operation.operationType || 'query'}: ${operation.operationName || 'unnamed'}
+await page.route('**/graphql*', async route => {
+  const request = route.request();
+  const postData = request.postDataJSON();
+
+  if (postData.operationName === '${operation.operationName}') {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          // Add your mock data here
+        }
+      })
+    });
+  } else {
+    await route.continue();
+  }
+});
+`,
+      cypress: `
+// Mock GraphQL ${operation.operationType || 'query'}: ${operation.operationName || 'unnamed'}
+cy.intercept('POST', '**/graphql*', (req) => {
+  if (req.body.operationName === '${operation.operationName}') {
+    req.reply({
+      statusCode: 200,
+      body: {
+        data: {
+          // Add your mock data here
+        }
+      }
+    });
+  }
+}).as('graphql${operation.operationName || 'Query'}');
+`,
+      puppeteer: `
+// Mock GraphQL ${operation.operationType || 'query'}: ${operation.operationName || 'unnamed'}
+await page.setRequestInterception(true);
+page.on('request', request => {
+  if (request.url().includes('/graphql') && request.method() === 'POST') {
+    const postData = JSON.parse(request.postData());
+    if (postData.operationName === '${operation.operationName}') {
+      request.respond({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          data: {
+            // Add your mock data here
+          }
+        })
+      });
+    } else {
+      request.continue();
+    }
+  } else {
+    request.continue();
+  }
+});
+`
+    };
+
+    return mocks[framework] || mocks.playwright;
+  }
+
+  // ===== WebSocket Detection =====
+
+  /**
+   * Detect if a request is attempting to upgrade to WebSocket
+   */
+  isWebSocketRequest(request) {
+    if (!request) return false;
+
+    // Check for WebSocket URL scheme
+    if (request.url && (request.url.startsWith('ws://') || request.url.startsWith('wss://'))) {
+      return true;
+    }
+
+    // Check for WebSocket upgrade headers
+    if (request.requestHeaders) {
+      const upgrade = request.requestHeaders.upgrade || request.requestHeaders.Upgrade;
+      const connection = request.requestHeaders.connection || request.requestHeaders.Connection;
+
+      if (upgrade && upgrade.toLowerCase() === 'websocket') {
+        return true;
+      }
+
+      if (connection && connection.toLowerCase().includes('upgrade')) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Parse WebSocket connection details
+   */
+  parseWebSocketConnection(request) {
+    if (!this.isWebSocketRequest(request)) {
+      return null;
+    }
+
+    const connection = {
+      type: 'websocket',
+      url: request.url,
+      timestamp: request.timestamp,
+      protocol: request.url.startsWith('wss://') ? 'wss' : 'ws',
+      headers: request.requestHeaders
+    };
+
+    // Extract WebSocket subprotocol if specified
+    if (request.requestHeaders && request.requestHeaders['Sec-WebSocket-Protocol']) {
+      connection.subprotocol = request.requestHeaders['Sec-WebSocket-Protocol'];
+    }
+
+    return connection;
+  }
+
+  /**
+   * Generate WebSocket mock/stub code for tests
+   */
+  generateWebSocketMock(connection, framework = 'playwright') {
+    if (!connection || connection.type !== 'websocket') return '';
+
+    const wsUrl = connection.url.replace(/^wss?:\/\//, '');
+
+    const mocks = {
+      playwright: `
+// Mock WebSocket connection to ${wsUrl}
+await page.route('**/socket*', async route => {
+  // WebSocket connections need special handling
+  // Consider using a WebSocket mock server or library
+  await route.abort();
+});
+
+// Alternative: Use a mock WebSocket server
+// See: https://playwright.dev/docs/mock#mocking-websockets
+`,
+      cypress: `
+// Mock WebSocket connection to ${wsUrl}
+// Cypress doesn't natively support WebSocket mocking
+// Consider using cy-plugin-websocket or mock the WebSocket constructor
+
+cy.window().then(win => {
+  const mockWebSocket = {
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    send: cy.stub().as('wsSend'),
+    close: cy.stub().as('wsClose')
+  };
+
+  win.WebSocket = function() {
+    return mockWebSocket;
+  };
+});
+`,
+      puppeteer: `
+// Mock WebSocket connection to ${wsUrl}
+// Puppeteer doesn't natively support WebSocket mocking
+// You'll need to use CDP (Chrome DevTools Protocol) or a mock server
+
+await page.evaluateOnNewDocument(() => {
+  window.WebSocket = class MockWebSocket {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 1; // OPEN
+      setTimeout(() => {
+        if (this.onopen) this.onopen();
+      }, 0);
+    }
+
+    send(data) {
+      console.log('WS Send:', data);
+      // Handle mock responses
+    }
+
+    close() {
+      this.readyState = 3; // CLOSED
+      if (this.onclose) this.onclose();
+    }
+  };
+});
+`
+    };
+
+    return mocks[framework] || mocks.playwright;
+  }
+
+  /**
+   * Note: Full WebSocket message recording requires chrome.debugger API
+   * which needs separate permission and is more invasive
+   */
+  async enableWebSocketDebugging(tabId) {
+    if (!chrome.debugger) {
+      console.warn('WebSocket debugging requires debugger permission');
+      return false;
+    }
+
+    try {
+      // Attach debugger to tab
+      await chrome.debugger.attach({ tabId }, '1.3');
+
+      // Enable Network domain to capture WebSocket frames
+      await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
+
+      // Listen for WebSocket events
+      chrome.debugger.onEvent.addListener((source, method, params) => {
+        if (source.tabId !== tabId) return;
+
+        switch (method) {
+          case 'Network.webSocketCreated':
+            console.log('WebSocket created:', params);
+            break;
+          case 'Network.webSocketFrameSent':
+            console.log('WebSocket frame sent:', params);
+            break;
+          case 'Network.webSocketFrameReceived':
+            console.log('WebSocket frame received:', params);
+            break;
+          case 'Network.webSocketClosed':
+            console.log('WebSocket closed:', params);
+            break;
+        }
+      });
+
+      console.log('✅ WebSocket debugging enabled for tab:', tabId);
+      return true;
+    } catch (error) {
+      console.error('Failed to enable WebSocket debugging:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Disable WebSocket debugging
+   */
+  async disableWebSocketDebugging(tabId) {
+    if (!chrome.debugger) return;
+
+    try {
+      await chrome.debugger.detach({ tabId });
+      console.log('WebSocket debugging disabled for tab:', tabId);
+    } catch (error) {
+      console.error('Failed to disable WebSocket debugging:', error);
+    }
+  }
 }
 
 // Export for use in other modules

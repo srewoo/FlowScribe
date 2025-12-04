@@ -352,17 +352,198 @@ class WaitStrategyEngine {
   }
 
   isFormElement(target) {
-    return ['input', 'select', 'textarea', 'form'].includes(target.tagName);
+    const tagName = (target.tagName || '').toLowerCase();
+    return ['input', 'select', 'textarea', 'form'].includes(tagName);
   }
 
   isSPA(pageContext) {
+    // Auto-detect framework if not provided
+    const detectedFramework = this.detectFrameworkFromDOM();
+
     return pageContext?.framework?.match(/react|angular|vue|svelte|ember/) ||
+           detectedFramework ||
            pageContext?.hasPushState ||
            pageContext?.hasRouter;
   }
 
   hasFramework(pageContext) {
-    return !!pageContext?.framework;
+    // Auto-detect framework if not provided
+    if (pageContext?.framework) {
+      return true;
+    }
+
+    return !!this.detectFrameworkFromDOM();
+  }
+
+  /**
+   * Auto-detect JavaScript framework from DOM elements
+   * Looks for framework-specific attributes and patterns
+   */
+  detectFrameworkFromDOM() {
+    // This runs in the extension context, not page context
+    // Would need to be injected into page or use content script
+    // For now, return null and rely on pageContext
+    // TODO: Implement via content script injection
+    return null;
+  }
+
+  /**
+   * Detect framework from page context (to be called from content script)
+   * This method should be injected into the page context
+   */
+  static detectFrameworkInPage() {
+    const detectors = {
+      react: () => {
+        // React 16+ (with Fiber)
+        if (document.querySelector('[data-reactroot]') ||
+            document.querySelector('[data-reactid]')) {
+          return 'react';
+        }
+
+        // React 17+
+        const root = document.getElementById('root');
+        if (root && root._reactRootContainer) {
+          return 'react';
+        }
+
+        // Check for React DevTools
+        if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+          return 'react';
+        }
+
+        // Check for React in window
+        if (window.React || window.ReactDOM) {
+          return 'react';
+        }
+
+        return null;
+      },
+
+      angular: () => {
+        // Angular.js (1.x)
+        if (document.querySelector('[ng-app]') ||
+            document.querySelector('[data-ng-app]') ||
+            document.querySelector('[ng-controller]')) {
+          return 'angular';
+        }
+
+        // Angular 2+
+        if (document.querySelector('[ng-version]')) {
+          return 'angular';
+        }
+
+        // Check for Angular in window
+        if (window.angular || window.ng) {
+          return 'angular';
+        }
+
+        // Check for Angular elements
+        if (document.querySelector('app-root') ||
+            document.querySelectorAll('[_ngcontent]').length > 0 ||
+            document.querySelectorAll('[_nghost]').length > 0) {
+          return 'angular';
+        }
+
+        return null;
+      },
+
+      vue: () => {
+        // Vue 2/3
+        if (document.querySelector('[data-v-]') ||
+            document.querySelector('[v-cloak]')) {
+          return 'vue';
+        }
+
+        // Check for Vue-specific attributes
+        const vueAttrs = document.querySelectorAll('[class*="v-"]');
+        if (vueAttrs.length > 0) {
+          return 'vue';
+        }
+
+        // Check for Vue in window
+        if (window.Vue || window.__VUE__) {
+          return 'vue';
+        }
+
+        // Vue DevTools detection
+        if (window.__VUE_DEVTOOLS_GLOBAL_HOOK__) {
+          return 'vue';
+        }
+
+        return null;
+      },
+
+      svelte: () => {
+        // Svelte adds data-svelte-* attributes
+        if (document.querySelector('[data-svelte-h]') ||
+            document.querySelector('[class*="svelte-"]')) {
+          return 'svelte';
+        }
+
+        // Check for Svelte-specific patterns
+        const svelteClasses = document.querySelectorAll('[class*="s-"]');
+        if (svelteClasses.length > 5) { // Svelte generates s-xxx classes
+          return 'svelte';
+        }
+
+        return null;
+      },
+
+      ember: () => {
+        // Ember.js
+        if (document.querySelector('[class*="ember-"]') ||
+            document.querySelector('[id*="ember"]')) {
+          return 'ember';
+        }
+
+        // Check for Ember in window
+        if (window.Ember || window.Em) {
+          return 'ember';
+        }
+
+        return null;
+      },
+
+      nextjs: () => {
+        // Next.js detection
+        if (document.getElementById('__next') ||
+            document.querySelector('[id="__NEXT_DATA__"]')) {
+          return 'nextjs';
+        }
+
+        return null;
+      },
+
+      nuxt: () => {
+        // Nuxt.js detection
+        if (document.getElementById('__nuxt') ||
+            document.querySelector('[data-n-head]')) {
+          return 'nuxt';
+        }
+
+        return null;
+      },
+
+      gatsby: () => {
+        // Gatsby detection
+        if (document.getElementById('___gatsby') ||
+            document.querySelector('[id="gatsby-focus-wrapper"]')) {
+          return 'gatsby';
+        }
+
+        return null;
+      }
+    };
+
+    // Try each detector in order
+    for (const [name, detector] of Object.entries(detectors)) {
+      const result = detector();
+      if (result) {
+        return result;
+      }
+    }
+
+    return null;
   }
 
   isAjaxHeavy(pageContext) {
