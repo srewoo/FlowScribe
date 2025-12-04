@@ -754,6 +754,28 @@ html, body {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
+.ai-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fef3c7;
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-warning .warning-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.ai-warning .warning-text {
+  color: #92400e;
+}
+
 .ai-config {
   margin-top: 16px;
   padding: 16px;

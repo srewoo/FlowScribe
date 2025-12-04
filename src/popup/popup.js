@@ -1,3 +1,11 @@
+// Debug mode - set to false for production
+const DEBUG_MODE = false;
+const Logger = {
+  log: (...args) => DEBUG_MODE && console.log("[FlowScribe]", ...args),
+  warn: (...args) => DEBUG_MODE && console.warn("[FlowScribe]", ...args),
+  error: (...args) => console.error("[FlowScribe]", ...args),
+  debug: (...args) => DEBUG_MODE && console.debug("[FlowScribe]", ...args)
+};
 /**
  * FlowScribe Unified UI Controller
  * Consolidated implementation with all features from popup, popup-enhanced, and popup-modern
@@ -200,7 +208,7 @@ class FlowScribeUI {
         this.settings = response.settings;
         this.applySettings();
       } else {
-        console.error('Failed to load settings:', response?.error || 'Unknown error');
+        Logger.error('Failed to load settings:', response?.error || 'Unknown error');
         this.settings = this.getDefaultSettings();
       }
 
@@ -233,9 +241,9 @@ class FlowScribeUI {
 
       this.selectedFramework = this.settings.selectedFramework || 'playwright';
 
-      console.log('✅ Popup settings loaded');
+      Logger.log('✅ Popup settings loaded');
     } catch (error) {
-      console.error('Failed to load settings:', error);
+      Logger.error('Failed to load settings:', error);
       this.settings = this.getDefaultSettings();
     }
   }
@@ -294,10 +302,10 @@ class FlowScribeUI {
           this.startDurationTimer();
         }
       } else if (response && !response.success) {
-        console.error('Failed to get current session:', response.error);
+        Logger.error('Failed to get current session:', response.error);
       }
     } catch (error) {
-      console.error('Failed to load current state:', error);
+      Logger.error('Failed to load current state:', error);
     }
   }
 
@@ -430,7 +438,7 @@ class FlowScribeUI {
     } catch (error) {
       this.hideLoading();
       this.showToast(`Error: ${error.message}`, 'error');
-      console.error('Failed to start recording:', error);
+      Logger.error('Failed to start recording:', error);
     }
   }
 
@@ -456,7 +464,7 @@ class FlowScribeUI {
 
     } catch (error) {
       this.showToast(`Error: ${error.message}`, 'error');
-      console.error('Failed to pause recording:', error);
+      Logger.error('Failed to pause recording:', error);
     }
   }
 
@@ -485,7 +493,7 @@ class FlowScribeUI {
     } catch (error) {
       this.hideLoading();
       this.showToast(`Error: ${error.message}`, 'error');
-      console.error('Failed to stop recording:', error);
+      Logger.error('Failed to stop recording:', error);
     }
   }
 
@@ -493,6 +501,14 @@ class FlowScribeUI {
     if (this.actions.length === 0) {
       this.showToast('No actions to generate script from', 'error');
       return;
+    }
+
+    // AI usage confirmation if AI is enabled
+    if (this.settings.enableAI && this.settings.apiKey) {
+      const confirmed = await this.confirmAIUsage();
+      if (!confirmed) {
+        return;
+      }
     }
 
     try {
@@ -555,7 +571,7 @@ class FlowScribeUI {
     } catch (error) {
       this.hideLoading();
       this.showToast(`Error: ${error.message}`, 'error');
-      console.error('Failed to generate script:', error);
+      Logger.error('Failed to generate script:', error);
     }
   }
 
@@ -720,7 +736,7 @@ class FlowScribeUI {
     } catch (error) {
       this.hideLoading();
       this.showToast(`Export failed: ${error.message}`, 'error');
-      console.error('Export failed:', error);
+      Logger.error('Export failed:', error);
     }
   }
 
@@ -760,7 +776,13 @@ class FlowScribeUI {
   toggleAIConfig() {
     const isEnabled = this.enableAIToggle.checked;
     this.aiConfig.style.display = isEnabled ? 'block' : 'none';
-    
+
+    // Show/hide AI usage warning
+    const aiWarning = document.getElementById('aiWarning');
+    if (aiWarning) {
+      aiWarning.style.display = isEnabled ? 'flex' : 'none';
+    }
+
     // Initialize model options when AI is first enabled
     if (isEnabled && this.aiModel.options.length <= 1) {
       this.updateModelOptions();
@@ -826,7 +848,7 @@ class FlowScribeUI {
     try {
       await chrome.storage.local.set({ selectedFramework: this.selectedFramework });
     } catch (error) {
-      console.error('Failed to save framework preference:', error);
+      Logger.error('Failed to save framework preference:', error);
     }
   }
 
@@ -868,10 +890,10 @@ class FlowScribeUI {
       });
       
       if (response.success) {
-        console.log('Framework preference saved:', this.selectedFramework);
+        Logger.log('Framework preference saved:', this.selectedFramework);
       }
     } catch (error) {
-      console.error('Failed to save framework preference:', error);
+      Logger.error('Failed to save framework preference:', error);
     }
   }
 
@@ -932,8 +954,8 @@ class FlowScribeUI {
 
   async handleAIEnhancementRequest(data, sendResponse) {
     try {
-      console.log('🤖 POPUP: Processing AI enhancement request in popup context...');
-      console.log('📊 POPUP: AI Request Data:', {
+      Logger.log('🤖 POPUP: Processing AI enhancement request in popup context...');
+      Logger.log('📊 POPUP: AI Request Data:', {
         framework: data.framework,
         actionCount: data.actions?.length || 0,
         provider: data.settings?.aiProvider,
@@ -961,7 +983,7 @@ class FlowScribeUI {
         throw new Error('AI service not properly configured');
       }
       
-      console.log('🚀 POPUP: Starting LLM processing with', data.actions?.length || 0, 'actions...');
+      Logger.log('🚀 POPUP: Starting LLM processing with', data.actions?.length || 0, 'actions...');
       
       // Generate enhanced script
       const enhancedScript = await aiService.enhanceScript(
@@ -970,12 +992,12 @@ class FlowScribeUI {
         data.options
       );
       
-      console.log('✅ POPUP: LLM enhancement completed successfully');
-      console.log('📏 POPUP: Enhanced script length:', enhancedScript?.length || 0, 'characters');
+      Logger.log('✅ POPUP: LLM enhancement completed successfully');
+      Logger.log('📏 POPUP: Enhanced script length:', enhancedScript?.length || 0, 'characters');
       sendResponse({ success: true, enhancedScript });
       
     } catch (error) {
-      console.error('❌ AI enhancement failed:', error);
+      Logger.error('❌ AI enhancement failed:', error);
       sendResponse({ success: false, error: error.message });
     }
   }
@@ -988,6 +1010,40 @@ class FlowScribeUI {
       puppeteer: 'js'
     };
     return extensions[framework] || 'txt';
+  }
+
+  /**
+   * Show AI usage confirmation dialog with cost/privacy warnings
+   * @returns {Promise<boolean>} Whether user confirmed
+   */
+  async confirmAIUsage() {
+    const providerName = {
+      openai: 'OpenAI',
+      anthropic: 'Anthropic',
+      google: 'Google AI'
+    }[this.settings.aiProvider] || this.settings.aiProvider;
+
+    const actionCount = this.actions.length;
+    const estimatedTokens = Math.ceil(actionCount * 150); // Rough estimate
+
+    const message = `🤖 AI-Enhanced Script Generation
+
+This will send your recorded actions to ${providerName} for processing.
+
+📊 Summary:
+• Actions to process: ${actionCount}
+• Estimated tokens: ~${estimatedTokens.toLocaleString()}
+• Provider: ${providerName}
+• Model: ${this.settings.aiModel}
+
+⚠️ Please note:
+• API charges may apply based on your ${providerName} plan
+• Action data (selectors, URLs, element info) will be transmitted
+• No passwords or sensitive values are sent
+
+Continue with AI-enhanced generation?`;
+
+    return confirm(message);
   }
 
   // ===== Actions List Management =====

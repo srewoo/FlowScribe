@@ -2,6 +2,18 @@
  * FlowScribe Unified Background Script
  * Consolidated implementation with all features from background, background-enhanced, and extension/background
  */
+
+// Debug mode - set to false for production
+const DEBUG_MODE = false;
+
+// Logger utility for conditional logging
+const Logger = {
+  log: (...args) => DEBUG_MODE && console.log('[FlowScribe]', ...args),
+  warn: (...args) => DEBUG_MODE && console.warn('[FlowScribe]', ...args),
+  error: (...args) => console.error('[FlowScribe]', ...args), // Always show errors
+  debug: (...args) => DEBUG_MODE && console.debug('[FlowScribe]', ...args)
+};
+
 class FlowScribeBackground {
   constructor() {
     this.sessions = new Map();
@@ -14,36 +26,141 @@ class FlowScribeBackground {
     this.pomGenerator = null;
     this.settings = {};
     this.sessionHistory = [];
-    this.encryptionKey = 'flowscribe-v1'; // Simple obfuscation key
+    this.cryptoKey = null; // AES-GCM encryption key
+    this.aiUsageStats = { callCount: 0, lastWarningTime: 0 }; // Track AI usage for warnings
     this.init();
   }
 
-  // Simple XOR-based obfuscation for API keys (not cryptographically secure, but better than plain text)
-  obfuscateKey(key) {
-    if (!key) return '';
-    return btoa(key.split('').map((c, i) =>
-      String.fromCharCode(c.charCodeAt(0) ^ this.encryptionKey.charCodeAt(i % this.encryptionKey.length))
-    ).join(''));
+  /**
+   * Initialize or retrieve the encryption key for secure API key storage
+   * Uses AES-GCM with a device-specific key stored in chrome.storage.local
+   */
+  async initCryptoKey() {
+    try {
+      const stored = await chrome.storage.local.get(['flowScribeCryptoKey']);
+
+      if (stored.flowScribeCryptoKey) {
+        // Import existing key
+        const keyData = new Uint8Array(stored.flowScribeCryptoKey);
+        this.cryptoKey = await crypto.subtle.importKey(
+          'raw',
+          keyData,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt', 'decrypt']
+        );
+      } else {
+        // Generate new key
+        this.cryptoKey = await crypto.subtle.generateKey(
+          { name: 'AES-GCM', length: 256 },
+          true,
+          ['encrypt', 'decrypt']
+        );
+        // Export and store key
+        const exportedKey = await crypto.subtle.exportKey('raw', this.cryptoKey);
+        await chrome.storage.local.set({
+          flowScribeCryptoKey: Array.from(new Uint8Array(exportedKey))
+        });
+      }
+      Logger.log('🔐 Crypto key initialized');
+    } catch (error) {
+      Logger.error('Failed to initialize crypto key:', error);
+      // Fallback: create in-memory key (won't persist across restarts)
+      this.cryptoKey = await crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    }
   }
 
-  deobfuscateKey(obfuscated) {
+  /**
+   * Encrypt API key using AES-GCM (cryptographically secure)
+   */
+  async encryptApiKey(plaintext) {
+    if (!plaintext) return '';
+    if (!this.cryptoKey) await this.initCryptoKey();
+
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(plaintext);
+
+      // Generate random IV for each encryption
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+
+      const encrypted = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv },
+        this.cryptoKey,
+        data
+      );
+
+      // Combine IV + encrypted data and encode as base64
+      const combined = new Uint8Array(iv.length + encrypted.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(encrypted), iv.length);
+
+      return btoa(String.fromCharCode(...combined));
+    } catch (error) {
+      Logger.error('Encryption failed:', error);
+      return ''; // Don't store key if encryption fails
+    }
+  }
+
+  /**
+   * Decrypt API key using AES-GCM
+   */
+  async decryptApiKey(encryptedBase64) {
+    if (!encryptedBase64) return '';
+    if (!this.cryptoKey) await this.initCryptoKey();
+
+    try {
+      // Decode base64
+      const combined = new Uint8Array(
+        atob(encryptedBase64).split('').map(c => c.charCodeAt(0))
+      );
+
+      // Extract IV (first 12 bytes) and encrypted data
+      const iv = combined.slice(0, 12);
+      const encrypted = combined.slice(12);
+
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: iv },
+        this.cryptoKey,
+        encrypted
+      );
+
+      const decoder = new TextDecoder();
+      return decoder.decode(decrypted);
+    } catch (error) {
+      // Try legacy XOR decryption for backward compatibility
+      Logger.warn('AES decryption failed, trying legacy format...');
+      return this.deobfuscateLegacyKey(encryptedBase64);
+    }
+  }
+
+  /**
+   * Legacy XOR deobfuscation for backward compatibility with old stored keys
+   */
+  deobfuscateLegacyKey(obfuscated) {
     if (!obfuscated) return '';
+    const legacyKey = 'flowscribe-v1';
     try {
       return atob(obfuscated).split('').map((c, i) =>
-        String.fromCharCode(c.charCodeAt(0) ^ this.encryptionKey.charCodeAt(i % this.encryptionKey.length))
+        String.fromCharCode(c.charCodeAt(0) ^ legacyKey.charCodeAt(i % legacyKey.length))
       ).join('');
     } catch {
-      return obfuscated; // Return as-is if not obfuscated (backward compatibility)
+      return obfuscated; // Return as-is if not encoded
     }
   }
 
   async init() {
+    await this.initCryptoKey(); // Initialize encryption first
     await this.loadSettings();
     await this.loadSessionHistory();
     await this.initializeAI();
     this.setupMessageHandlers();
     this.setupTabHandlers();
-    console.log('FlowScribe background service worker loaded');
+    Logger.log('FlowScribe background service worker loaded');
   }
 
   async loadSettings() {
@@ -70,14 +187,14 @@ class FlowScribeBackground {
         cicdPlatform: 'github-actions'
       };
 
-      // Deobfuscate API key if it exists
+      // Decrypt API key if it exists (uses AES-GCM with legacy fallback)
       if (this.settings.apiKey) {
-        this.settings.apiKey = this.deobfuscateKey(this.settings.apiKey);
+        this.settings.apiKey = await this.decryptApiKey(this.settings.apiKey);
       }
 
-      console.log('✅ Settings loaded successfully');
+      Logger.log('Settings loaded successfully');
     } catch (error) {
-      console.error('Failed to load settings:', error);
+      Logger.error('Failed to load settings:', error);
       this.settings = {
         selectedFramework: 'playwright',
         enableAI: false,
@@ -100,7 +217,7 @@ class FlowScribeBackground {
     try {
       await chrome.storage.local.set({ flowScribeSettings: this.settings });
     } catch (error) {
-      console.error('Failed to save settings:', error);
+      Logger.error('Failed to save settings:', error);
     }
   }
 
@@ -109,7 +226,7 @@ class FlowScribeBackground {
       const result = await chrome.storage.local.get(['sessionHistory']);
       this.sessionHistory = result.sessionHistory || [];
     } catch (error) {
-      console.error('Failed to load session history:', error);
+      Logger.error('Failed to load session history:', error);
       this.sessionHistory = [];
     }
   }
@@ -121,7 +238,7 @@ class FlowScribeBackground {
       await chrome.storage.local.set({ sessionHistory: recentHistory });
       this.sessionHistory = recentHistory;
     } catch (error) {
-      console.error('Failed to save session history:', error);
+      Logger.error('Failed to save session history:', error);
     }
   }
 
@@ -138,7 +255,7 @@ class FlowScribeBackground {
       loadSettings: () => Promise.resolve()
     };
 
-    console.log('🤖 AI service initialized (service worker compatible)');
+    Logger.log('🤖 AI service initialized (service worker compatible)');
   }
 
   /**
@@ -147,7 +264,7 @@ class FlowScribeBackground {
    */
   async callAIProvider(framework, actions, options = {}) {
     if (!this.settings.enableAI || !this.settings.apiKey) {
-      console.log('⚠️ AI not configured - using template generation');
+      Logger.log('⚠️ AI not configured - using template generation');
       return null;
     }
 
@@ -155,15 +272,15 @@ class FlowScribeBackground {
     const model = this.settings.aiModel || 'gpt-4o';
 
     try {
-      console.log(`🤖 Calling ${provider} (${model}) for script enhancement...`);
-      console.log(`📊 Processing ${actions.length} actions`);
+      Logger.log(`🤖 Calling ${provider} (${model}) for script enhancement...`);
+      Logger.log(`📊 Processing ${actions.length} actions`);
 
       // Check if we need batched processing for large recordings (>100 actions)
       if (actions.length > 100) {
-        console.log('📊 Large recording detected - using chunked batch processing');
+        Logger.log('📊 Large recording detected - using chunked batch processing');
         const batchedResult = await this.processActionsInBatches(framework, actions, options);
         if (batchedResult) {
-          console.log('✅ Batched AI enhancement successful');
+          Logger.log('✅ Batched AI enhancement successful');
           return batchedResult;
         }
       }
@@ -171,7 +288,7 @@ class FlowScribeBackground {
       // Single call for smaller recordings
       const prompt = this.buildAIPrompt(framework, actions, options);
       const estimatedTokens = this.estimateTokens(prompt);
-      console.log(`📊 Estimated prompt tokens: ~${estimatedTokens}`);
+      Logger.log(`📊 Estimated prompt tokens: ~${estimatedTokens}`);
 
       let response;
       switch (provider) {
@@ -185,16 +302,16 @@ class FlowScribeBackground {
           response = await this.callGoogleAI(model, prompt);
           break;
         default:
-          console.warn(`Unknown AI provider: ${provider}`);
+          Logger.warn(`Unknown AI provider: ${provider}`);
           return null;
       }
 
       if (response) {
-        console.log('✅ AI enhancement successful');
+        Logger.log('✅ AI enhancement successful');
         return response;
       }
     } catch (error) {
-      console.error('❌ AI enhancement failed:', error.message);
+      Logger.error('❌ AI enhancement failed:', error.message);
     }
 
     return null;
@@ -479,14 +596,14 @@ describe('User Flow Test', () => {
     if (actions.length <= MAX_ACTIONS_FOR_SINGLE_CALL) {
       const prompt = this.buildAIPrompt(framework, actions, options);
       const estimatedTokens = this.estimateTokens(prompt);
-      console.log(`📊 Single batch: ${actions.length} actions, ~${estimatedTokens} tokens`);
+      Logger.log(`📊 Single batch: ${actions.length} actions, ~${estimatedTokens} tokens`);
       return null; // Let caller use single call
     }
 
     // For larger sets, chunk and batch process
-    console.log(`📊 Large recording: ${actions.length} actions - using chunked processing`);
+    Logger.log(`📊 Large recording: ${actions.length} actions - using chunked processing`);
     const chunks = this.chunkActions(actions, MAX_TOKENS_PER_CHUNK);
-    console.log(`📊 Split into ${chunks.length} chunks`);
+    Logger.log(`📊 Split into ${chunks.length} chunks`);
 
     const scriptParts = [];
 
@@ -494,7 +611,7 @@ describe('User Flow Test', () => {
       const chunk = chunks[i];
       const chunkInfo = { current: i + 1, total: chunks.length };
 
-      console.log(`🔄 Processing chunk ${i + 1}/${chunks.length} (${chunk.length} actions)`);
+      Logger.log(`🔄 Processing chunk ${i + 1}/${chunks.length} (${chunk.length} actions)`);
 
       const prompt = this.buildAIPrompt(framework, chunk, options, chunkInfo);
 
@@ -769,7 +886,7 @@ describe('User Flow Test', () => {
         case 'GET_SESSION_ACTIONS':
           const sessionForActions = this.sessions.get(this.currentSessionId);
           if (sessionForActions) {
-            console.log('📤 Sending', sessionForActions.actions.length, 'actions to content script for restoration');
+            Logger.log('📤 Sending', sessionForActions.actions.length, 'actions to content script for restoration');
             sendResponse({ 
               success: true, 
               actions: sessionForActions.actions,
@@ -808,12 +925,12 @@ describe('User Flow Test', () => {
           }
           
           if (!actions || actions.length === 0) {
-            console.warn('❌ No actions found for script generation');
+            Logger.warn('❌ No actions found for script generation');
             sendResponse({ success: false, error: 'No actions found to generate script' });
             return;
           }
           
-          console.log('🎬 Generating script with actions:', {
+          Logger.log('🎬 Generating script with actions:', {
             actionCount: actions.length,
             actionTypes: actions.map(a => a.type),
             hasElementData: actions.some(a => a.element && Object.keys(a.element).length > 0),
@@ -861,15 +978,15 @@ describe('User Flow Test', () => {
           try {
             this.exportSession(message.sessionId, message.format)
               .then(exportData => {
-                console.log('✅ Export session successful:', exportData);
+                Logger.log('✅ Export session successful:', exportData);
                 sendResponse({ success: true, data: exportData });
               })
               .catch(error => {
-                console.error('❌ Export session failed:', error);
+                Logger.error('❌ Export session failed:', error);
                 sendResponse({ success: false, error: error.message });
               });
           } catch (error) {
-            console.error('❌ Export session error:', error);
+            Logger.error('❌ Export session error:', error);
             sendResponse({ success: false, error: error.message });
           }
           return true;
@@ -897,12 +1014,12 @@ describe('User Flow Test', () => {
               title: tab.title || '',
               isUserInitiated: this.isUserInitiatedNavigation(session.actions)
             });
-            console.log('📍 Navigation recorded:', changeInfo.url);
+            Logger.log('📍 Navigation recorded:', changeInfo.url);
           }
 
           // Auto-restore recording after page loads
           if (changeInfo.status === 'complete' && session.status === 'recording') {
-            console.log('🔄 Page loaded, restoring recording on:', tab.url);
+            Logger.log('🔄 Page loaded, restoring recording on:', tab.url);
 
             // Wait for content script to initialize, then restore recording
             setTimeout(async () => {
@@ -913,7 +1030,7 @@ describe('User Flow Test', () => {
                   settings: this.settings,
                   isRestore: true
                 });
-                console.log('✅ Recording restored after navigation');
+                Logger.log('✅ Recording restored after navigation');
               } catch (error) {
                 // Content script might not be ready yet, retry once more
                 setTimeout(async () => {
@@ -924,9 +1041,9 @@ describe('User Flow Test', () => {
                       settings: this.settings,
                       isRestore: true
                     });
-                    console.log('✅ Recording restored after retry');
+                    Logger.log('✅ Recording restored after retry');
                   } catch (retryError) {
-                    console.warn('Failed to restore recording after retry:', retryError.message);
+                    Logger.warn('Failed to restore recording after retry:', retryError.message);
                   }
                 }, 1000);
               }
@@ -957,7 +1074,7 @@ describe('User Flow Test', () => {
       const existingSessionId = this.activeSessionsByTab.get(tabId);
       const existingSession = this.sessions.get(existingSessionId);
       if (existingSession && existingSession.status === 'recording') {
-        console.warn(`Tab ${tabId} already has active session ${existingSessionId}`);
+        Logger.warn(`Tab ${tabId} already has active session ${existingSessionId}`);
         return existingSessionId; // Return existing session instead of creating new one
       }
     }
@@ -988,14 +1105,14 @@ describe('User Flow Test', () => {
         files: ['content.js']
       });
     } catch (error) {
-      console.warn('Content script may already be injected:', error);
+      Logger.warn('Content script may already be injected:', error);
     }
 
     // Start recording in content script
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'START_RECORDING' });
     } catch (error) {
-      console.error('Failed to start recording in content script:', error);
+      Logger.error('Failed to start recording in content script:', error);
       // Cleanup the session if we can't start recording
       this.sessions.delete(sessionId);
       this.currentSessionId = null;
@@ -1037,7 +1154,7 @@ describe('User Flow Test', () => {
         session.actionCount = session.actions.length;
       }
     } catch (error) {
-      console.warn('Could not get final actions from content script:', error);
+      Logger.warn('Could not get final actions from content script:', error);
     }
 
     // Add to session history
@@ -1070,7 +1187,7 @@ describe('User Flow Test', () => {
     try {
       await chrome.tabs.sendMessage(session.tabId, { type: 'HIDE_RECORDING_INDICATOR' });
     } catch (error) {
-      console.warn('Could not hide recording indicator:', error);
+      Logger.warn('Could not hide recording indicator:', error);
     }
 
     return completedSession;
@@ -1098,10 +1215,10 @@ describe('User Flow Test', () => {
     try {
       await chrome.tabs.sendMessage(session.tabId, { type: 'PAUSE_RECORDING' });
     } catch (error) {
-      console.warn('Could not pause content script recording:', error);
+      Logger.warn('Could not pause content script recording:', error);
     }
 
-    console.log('🔄 Recording session paused');
+    Logger.log('🔄 Recording session paused');
   }
 
   async resumeRecordingSession() {
@@ -1121,10 +1238,10 @@ describe('User Flow Test', () => {
     try {
       await chrome.tabs.sendMessage(session.tabId, { type: 'RESUME_RECORDING' });
     } catch (error) {
-      console.warn('Could not resume content script recording:', error);
+      Logger.warn('Could not resume content script recording:', error);
     }
 
-    console.log('▶️ Recording session resumed');
+    Logger.log('▶️ Recording session resumed');
   }
 
   shouldRecordNavigation(newUrl, existingActions) {
@@ -1184,7 +1301,7 @@ describe('User Flow Test', () => {
     const session = this.sessions.get(sessionId);
     if (session && session.tabId === tabId) {
       session.actions.push(message.action);
-      console.log('💾 Action stored in session:', {
+      Logger.log('💾 Action stored in session:', {
         type: message.action.type,
         totalSessionActions: session.actions.length,
         url: message.url,
@@ -1207,7 +1324,7 @@ describe('User Flow Test', () => {
     const session = this.sessions.get(sessionId);
     if (session && session.tabId === tabId) {
       session.actions.push(...message.actions);
-      console.log('💾 Multiple actions stored in session:', {
+      Logger.log('💾 Multiple actions stored in session:', {
         newActions: message.actions.length,
         totalSessionActions: session.actions.length,
         sessionId: sessionId
@@ -1216,7 +1333,7 @@ describe('User Flow Test', () => {
   }
 
   async generateScript(framework, actions, options = {}) {
-    console.log('🎭 Script generation started:', {
+    Logger.log('🎭 Script generation started:', {
       framework,
       actionCount: actions?.length || 0,
       aiEnabled: this.settings.enableAI,
@@ -1227,23 +1344,23 @@ describe('User Flow Test', () => {
     // Try AI enhancement if enabled and configured
     if (this.settings.enableAI && this.settings.apiKey && options.useAI !== false) {
       try {
-        console.log('🤖 ATTEMPTING LLM GENERATION - Using direct AI service...');
+        Logger.log('🤖 ATTEMPTING LLM GENERATION - Using direct AI service...');
         // Use the service worker-compatible AI service directly
         const enhancedScript = await this.callAIProvider(framework, actions, options);
         if (enhancedScript) {
-          console.log('✅ SUCCESS: Script generated using LLM (AI-Enhanced)');
-          console.log('🎯 LLM Script Preview:', enhancedScript.substring(0, 200) + '...');
+          Logger.log('✅ SUCCESS: Script generated using LLM (AI-Enhanced)');
+          Logger.log('🎯 LLM Script Preview:', enhancedScript.substring(0, 200) + '...');
           return enhancedScript;
         }
       } catch (error) {
-        console.warn('❌ LLM GENERATION FAILED - Falling back to template:', error.message);
+        Logger.warn('❌ LLM GENERATION FAILED - Falling back to template:', error.message);
       }
     } else {
-      console.log('⚠️ AI generation skipped - AI disabled or no API key');
+      Logger.log('⚠️ AI generation skipped - AI disabled or no API key');
     }
 
     // Fallback to template generation
-    console.log('📝 FALLBACK: Using template generation (Non-AI)');
+    Logger.log('📝 FALLBACK: Using template generation (Non-AI)');
     const generators = {
       playwright: this.generatePlaywrightScript,
       selenium: this.generateSeleniumScript,
@@ -1257,8 +1374,8 @@ describe('User Flow Test', () => {
     }
 
     const templateScript = generator.call(this, actions);
-    console.log('✅ SUCCESS: Script generated using TEMPLATE (Non-AI)');
-    console.log('🎯 Template Script Preview:', templateScript.substring(0, 200) + '...');
+    Logger.log('✅ SUCCESS: Script generated using TEMPLATE (Non-AI)');
+    Logger.log('🎯 Template Script Preview:', templateScript.substring(0, 200) + '...');
     return templateScript;
   }
 
@@ -1287,7 +1404,7 @@ describe('User Flow Test', () => {
       }, (response) => {
         if (chrome.runtime.lastError) {
           // No popup context available, fallback to template
-          console.log('No popup context available for AI enhancement');
+          Logger.log('No popup context available for AI enhancement');
           resolve(null);
         } else if (response && response.success) {
           resolve(response.enhancedScript);
@@ -1308,13 +1425,13 @@ describe('User Flow Test', () => {
       // Merge new settings with existing ones
       this.settings = { ...this.settings, ...newSettings };
 
-      // Create a copy for storage with obfuscated API key
+      // Create a copy for storage with encrypted API key (AES-GCM)
       const settingsToStore = { ...this.settings };
       if (settingsToStore.apiKey) {
-        settingsToStore.apiKey = this.obfuscateKey(settingsToStore.apiKey);
+        settingsToStore.apiKey = await this.encryptApiKey(settingsToStore.apiKey);
       }
 
-      // Save to chrome storage with obfuscated key
+      // Save to chrome storage with encrypted key
       await chrome.storage.local.set({ flowScribeSettings: settingsToStore });
 
       // Update AI service with the new settings (plain text in memory)
@@ -1327,9 +1444,9 @@ describe('User Flow Test', () => {
         });
       }
 
-      console.log('⚙️ Settings updated and saved to storage');
+      Logger.log('⚙️ Settings updated and saved to storage');
     } catch (error) {
-      console.error('Failed to update settings:', error);
+      Logger.error('Failed to update settings:', error);
       throw error;
     }
   }
@@ -1439,7 +1556,7 @@ describe('User Flow Test', () => {
     optimizedActions.forEach((action, index) => {
       // Validate action has required data
       if (!action || !action.type) {
-        console.warn('Skipping invalid action:', action);
+        Logger.warn('Skipping invalid action:', action);
         return;
       }
 
@@ -1454,7 +1571,7 @@ describe('User Flow Test', () => {
 
       // Validate element data exists for non-navigation actions
       if (action.type !== 'navigation' && !action.element) {
-        console.warn('Skipping action without element data:', action.type);
+        Logger.warn('Skipping action without element data:', action.type);
         return;
       }
 

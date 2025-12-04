@@ -41,9 +41,9 @@
         </div>
 
         <!-- Current Session Info -->
-        <div class="session-card" id="sessionCard">
-            <div class="session-title" id="sessionTitle">Department of sales</div>
-            <div class="session-url" id="sessionUrl">https://coaching.staging.mindtickle.com/login</div>
+        <div class="session-card" id="sessionCard" style="display: none;">
+            <div class="session-title" id="sessionTitle">Current Page</div>
+            <div class="session-url" id="sessionUrl"></div>
         </div>
 
         <!-- Framework Selection -->
@@ -154,6 +154,10 @@
                                 <span class="setting-desc">Use AI for smarter test scripts</span>
                             </div>
                         </label>
+                        <div class="ai-warning" id="aiWarning" style="display: none;">
+                            <span class="warning-icon">⚠️</span>
+                            <span class="warning-text">Enabling AI will send action data to external AI providers. API charges may apply.</span>
+                        </div>
                         <div class="ai-config" id="aiConfig" style="display: none;">
                             <div class="form-group">
                                 <label>AI Provider:</label>

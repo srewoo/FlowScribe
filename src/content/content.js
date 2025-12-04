@@ -1,3 +1,11 @@
+// Debug mode - set to false for production
+const DEBUG_MODE = false;
+const Logger = {
+  log: (...args) => DEBUG_MODE && console.log("[FlowScribe]", ...args),
+  warn: (...args) => DEBUG_MODE && console.warn("[FlowScribe]", ...args),
+  error: (...args) => console.error("[FlowScribe]", ...args),
+  debug: (...args) => DEBUG_MODE && console.debug("[FlowScribe]", ...args)
+};
 /**
  * Draggable Floating Recording Indicator
  * Shows a pill-shaped indicator when recording is active
@@ -51,7 +59,7 @@ class RecordingIndicator {
         this.indicator.classList.add('flowscribe-visible');
       }, 100);
     } else {
-      console.warn('FlowScribe: Cannot create indicator - no document body available');
+      Logger.warn('FlowScribe: Cannot create indicator - no document body available');
     }
   }
 
@@ -367,7 +375,7 @@ class RecordingIndicator {
    */
   handleClick() {
     // Open popup or show quick actions
-    console.log('FlowScribe indicator clicked');
+    Logger.log('FlowScribe indicator clicked');
     // You can add custom behavior here, like opening the extension popup
     // or showing a quick action menu
   }
@@ -428,7 +436,7 @@ class RecordingIndicator {
         return JSON.parse(saved);
       }
     } catch (e) {
-      console.warn('Failed to load indicator position:', e);
+      Logger.warn('Failed to load indicator position:', e);
     }
 
     // Default position (top-right)
@@ -445,7 +453,7 @@ class RecordingIndicator {
     try {
       localStorage.setItem('flowscribe-indicator-position', JSON.stringify(this.position));
     } catch (e) {
-      console.warn('Failed to save indicator position:', e);
+      Logger.warn('Failed to save indicator position:', e);
     }
   }
 
@@ -498,7 +506,7 @@ class FlowScribeRecorder {
   init() {
     this.setupMessageListener();
     this.setupIframeMonitoring();
-    console.log('FlowScribe content script loaded');
+    Logger.log('FlowScribe content script loaded');
 
     // Cleanup on page unload
     window.addEventListener('beforeunload', () => {
@@ -590,7 +598,7 @@ class FlowScribeRecorder {
       });
       
       if (response && response.isRecording) {
-        console.log('🔄 Restoring recording state after navigation');
+        Logger.log('🔄 Restoring recording state after navigation');
         this.startRecording(true);
       }
     } catch (error) {
@@ -602,12 +610,12 @@ class FlowScribeRecorder {
           });
           
           if (response && response.isRecording) {
-            console.log('🔄 Restoring recording state after retry');
+            Logger.log('🔄 Restoring recording state after retry');
             this.startRecording(true);
           }
         } catch (retryError) {
           // Extension context invalidated or not ready
-          console.log('Recording state check failed:', retryError.message);
+          Logger.log('Recording state check failed:', retryError.message);
         }
       }, 500);
     }
@@ -680,18 +688,18 @@ class FlowScribeRecorder {
       
       // Add error handling for script loading
       script.onerror = () => {
-        console.warn('Failed to load iframe-recorder.js, trying alternative approach');
+        Logger.warn('Failed to load iframe-recorder.js, trying alternative approach');
         this.setupDirectEventListeners(iframe, iframeId);
       };
       
       script.onload = () => {
-        console.log('FlowScribe iframe recorder loaded successfully');
+        Logger.log('FlowScribe iframe recorder loaded successfully');
       };
       
       (iframeDoc.head || iframeDoc.documentElement).appendChild(script);
 
     } catch (error) {
-      console.warn('Cannot access iframe content (likely cross-origin):', error);
+      Logger.warn('Cannot access iframe content (likely cross-origin):', error);
     }
   }
 
@@ -723,9 +731,9 @@ class FlowScribeRecorder {
         }, true);
       });
 
-      console.log('FlowScribe direct event listeners setup for iframe:', iframeId);
+      Logger.log('FlowScribe direct event listeners setup for iframe:', iframeId);
     } catch (error) {
-      console.warn('Failed to setup direct event listeners:', error);
+      Logger.warn('Failed to setup direct event listeners:', error);
     }
   }
 
@@ -736,20 +744,20 @@ class FlowScribeRecorder {
     // If this is a restore after page reload, get existing actions from background
     if (isRestore) {
       try {
-        console.log('🔄 Restoring recording state and existing actions...');
+        Logger.log('🔄 Restoring recording state and existing actions...');
         const response = await chrome.runtime.sendMessage({ type: 'GET_SESSION_ACTIONS' });
         if (response && response.success && response.actions) {
           this.actions = response.actions;
-          console.log(`✅ Restored ${this.actions.length} existing actions from session`);
+          Logger.log(`✅ Restored ${this.actions.length} existing actions from session`);
         }
       } catch (error) {
-        console.warn('Failed to restore actions:', error);
+        Logger.warn('Failed to restore actions:', error);
       }
     }
     
     this.isRecording = true;
     this.isPaused = false;
-    console.log(`🎬 FlowScribe recording started${isRestore ? ' (restored)' : ''} - Total actions: ${this.actions.length}`);
+    Logger.log(`🎬 FlowScribe recording started${isRestore ? ' (restored)' : ''} - Total actions: ${this.actions.length}`);
 
     this.setupEventListeners();
     this.showRecordingIndicator();
@@ -763,7 +771,7 @@ class FlowScribeRecorder {
             type: 'FLOWSCRIBE_IFRAME_START_RECORDING'
           }, targetOrigin);
         } catch (error) {
-          console.warn('Failed to send start recording message to iframe:', error);
+          Logger.warn('Failed to send start recording message to iframe:', error);
         }
       }
     });
@@ -795,12 +803,12 @@ class FlowScribeRecorder {
             type: 'FLOWSCRIBE_IFRAME_STOP_RECORDING'
           }, targetOrigin);
         } catch (error) {
-          console.warn('Failed to send stop recording message to iframe:', error);
+          Logger.warn('Failed to send stop recording message to iframe:', error);
         }
       }
     });
 
-    console.log(`🛑 FlowScribe recording stopped - Total actions recorded: ${this.actions.length}`);
+    Logger.log(`🛑 FlowScribe recording stopped - Total actions recorded: ${this.actions.length}`);
 
     // Send stop status to background
     chrome.runtime.sendMessage({
@@ -822,7 +830,7 @@ class FlowScribeRecorder {
       this.recordingIndicator.setPaused(true);
     }
     
-    console.log('FlowScribe recording paused');
+    Logger.log('FlowScribe recording paused');
   }
 
   resumeRecording() {
@@ -837,7 +845,7 @@ class FlowScribeRecorder {
       this.recordingIndicator.setPaused(false);
     }
     
-    console.log('FlowScribe recording resumed');
+    Logger.log('FlowScribe recording resumed');
   }
 
   setupEventListeners() {
@@ -879,7 +887,7 @@ class FlowScribeRecorder {
     
     this.actions.push(optimizedAction);
 
-    console.log('✅ Action recorded with DOM data:', {
+    Logger.log('✅ Action recorded with DOM data:', {
       type: optimizedAction.type,
       element: optimizedAction.element,
       hasAttributes: !!optimizedAction.element?.attributes,
@@ -950,7 +958,7 @@ class FlowScribeRecorder {
     if (!this.isRecording) return;
     
     this.actions.push(data.action);
-    console.log('Iframe action recorded:', data.action);
+    Logger.log('Iframe action recorded:', data.action);
   }
 
   shouldSkipElement(element) {
@@ -1262,7 +1270,7 @@ class FlowScribeRecorder {
     // Safe append - check if body exists
     const bodyTarget = document.body || document.documentElement;
     if (!bodyTarget) {
-      console.warn('FlowScribe: Cannot show notification - no document body available');
+      Logger.warn('FlowScribe: Cannot show notification - no document body available');
       return;
     }
     bodyTarget.appendChild(notification);
@@ -1323,7 +1331,7 @@ class FlowScribeRecorder {
         });
       });
     } catch (error) {
-      console.error('Screenshot capture failed:', error);
+      Logger.error('Screenshot capture failed:', error);
       throw error;
     }
   }
@@ -1339,7 +1347,7 @@ class FlowScribeRecorder {
           this.screenshots.set(action.id, screenshot);
         })
         .catch(error => {
-          console.warn('Failed to capture screenshot for action:', error);
+          Logger.warn('Failed to capture screenshot for action:', error);
         });
     }
 

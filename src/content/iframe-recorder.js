@@ -1,14 +1,64 @@
 // FlowScribe Iframe Recorder - CSP Compliant Version
 (function() {
   'use strict';
-  
+
   let isRecording = false;
   let eventListeners = [];
-  
+  let parentOrigin = null; // Store validated parent origin for secure messaging
+
   // Initialize when script loads
   console.log('FlowScribe iframe recorder initialized');
-  
+
+  /**
+   * Validate if the message origin is from the parent window
+   * This prevents accepting messages from untrusted sources
+   */
+  function isValidParentOrigin(origin) {
+    // If we already have a validated parent origin, check against it
+    if (parentOrigin && origin === parentOrigin) {
+      return true;
+    }
+
+    // Get the parent's origin for first-time validation
+    try {
+      // Try to access parent origin directly (same-origin)
+      if (window.parent && window.parent.location && window.parent.location.origin) {
+        const expectedOrigin = window.parent.location.origin;
+        if (origin === expectedOrigin) {
+          parentOrigin = origin; // Cache the validated origin
+          return true;
+        }
+      }
+    } catch (e) {
+      // Cross-origin - can't access parent.location
+      // Accept the origin from the first FLOWSCRIBE message and validate subsequent ones
+      if (!parentOrigin && origin && origin !== 'null') {
+        // First message - store the origin for future validation
+        parentOrigin = origin;
+        return true;
+      }
+    }
+
+    // Also accept chrome-extension:// origins
+    if (origin && origin.startsWith('chrome-extension://')) {
+      parentOrigin = origin;
+      return true;
+    }
+
+    return false;
+  }
+
   window.addEventListener('message', (event) => {
+    // Security: Validate message origin before processing
+    if (!event.data || !event.data.type) return;
+    if (!event.data.type.startsWith('FLOWSCRIBE_')) return;
+
+    // Validate origin for FlowScribe messages
+    if (!isValidParentOrigin(event.origin)) {
+      console.warn('FlowScribe: Rejected message from untrusted origin:', event.origin);
+      return;
+    }
+
     if (event.data.type === 'FLOWSCRIBE_IFRAME_START_RECORDING') {
       isRecording = true;
       setupEventListeners();
@@ -72,12 +122,13 @@
           action.altKey = event.altKey;
         }
 
-        // Send to parent window
+        // Send to parent window using validated origin (not wildcard)
         try {
+          const targetOrigin = parentOrigin || '*'; // Use validated origin, fallback to * only if not yet established
           window.parent.postMessage({
             type: 'FLOWSCRIBE_IFRAME_ACTION',
             action: action
-          }, '*');
+          }, targetOrigin);
         } catch (error) {
           console.warn('Failed to send iframe action to parent:', error);
         }
