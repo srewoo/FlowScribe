@@ -2,6 +2,9 @@ const path = require('path');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
 const { CleanWebpackPlugin } = require('clean-webpack-plugin');
 
+// Browser target from environment variable (default: chrome)
+const BROWSER = process.env.BROWSER || 'chrome';
+
 module.exports = {
   mode: 'production',
   entry: {
@@ -11,10 +14,11 @@ module.exports = {
     'enhanced-recorder': './src/content/enhanced-recorder.js',
     'assertion-generator': './src/utils/assertion-generator.js',
     'test-generator': './src/generators/test-generator.js',
-    'wait-strategy': './src/utils/wait-strategy.js'
+    'wait-strategy': './src/utils/wait-strategy.js',
+    'browser-api': './src/utils/browser-api.js'
   },
   output: {
-    path: path.resolve(__dirname, 'dist'),
+    path: path.resolve(__dirname, `dist-${BROWSER}`),
     filename: '[name].js',
     clean: true
   },
@@ -41,7 +45,7 @@ module.exports = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: 'manifest.json',
+          from: BROWSER === 'firefox' ? 'manifest.firefox.json' : 'manifest.json',
           to: 'manifest.json'
         },
         {

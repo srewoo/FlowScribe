@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
   "name": "FlowScribe",
-  "version": "2.1.0",
-  "description": "From Navigation to Automation",
+  "version": "2.0.0",
+  "description": "From Navigation to Automation - AI-Powered Test Recorder",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "flowscribe@example.com",
+      "strict_min_version": "109.0"
+    }
+  },
   "permissions": [
     "activeTab",
     "storage",
@@ -14,7 +20,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js",
+    "scripts": ["background.js"],
     "type": "module"
   },
   "content_scripts": [

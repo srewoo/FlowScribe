@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FlowScribe - Help & Documentation</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
             margin: 0;
@@ -12,317 +16,1114 @@
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             color: #333;
+            line-height: 1.6;
         }
-        
+
         .container {
-            max-width: 800px;
+            max-width: 900px;
             margin: 0 auto;
             background: white;
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
-        
+
         .header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
             border-bottom: 2px solid #f0f0f0;
-            padding-bottom: 20px;
+            padding-bottom: 30px;
         }
-        
+
         .logo {
-            width: 64px;
-            height: 64px;
+            width: 80px;
+            height: 80px;
             background: linear-gradient(135deg, #667eea, #764ba2);
-            border-radius: 12px;
-            margin: 0 auto 15px;
+            border-radius: 16px;
+            margin: 0 auto 20px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 24px;
+            font-size: 32px;
             font-weight: bold;
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
         }
-        
+
         h1 {
             color: #2c3e50;
             margin: 0;
-            font-size: 28px;
+            font-size: 32px;
         }
-        
+
         .subtitle {
             color: #7f8c8d;
-            margin: 5px 0 0 0;
-            font-size: 16px;
-        }
-        
-        .section {
-            margin-bottom: 30px;
-        }
-        
-        h2 {
-            color: #34495e;
-            font-size: 22px;
-            margin-bottom: 15px;
-            padding-left: 10px;
-            border-left: 4px solid #667eea;
-        }
-        
-        h3 {
-            color: #2c3e50;
+            margin: 10px 0 0 0;
             font-size: 18px;
+        }
+
+        .version-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
+        .toc {
+            background: #f8f9fa;
+            padding: 20px 30px;
+            border-radius: 12px;
+            margin-bottom: 40px;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+
+        .toc ul {
+            columns: 2;
+            column-gap: 40px;
+        }
+
+        .toc a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        h2 {
+            color: #2c3e50;
+            font-size: 24px;
+            margin-bottom: 20px;
+            padding-left: 15px;
+            border-left: 5px solid #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h3 {
+            color: #34495e;
+            font-size: 18px;
+            margin: 25px 0 15px 0;
+        }
+
+        h4 {
+            color: #2c3e50;
+            font-size: 16px;
             margin: 20px 0 10px 0;
         }
-        
+
         .step {
             background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-            border-left: 4px solid #28a745;
+            padding: 18px 20px;
+            border-radius: 10px;
+            margin: 12px 0;
+            border-left: 5px solid #28a745;
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
         }
-        
+
         .step-number {
             background: #28a745;
             color: white;
-            width: 24px;
-            height: 24px;
+            min-width: 28px;
+            height: 28px;
             border-radius: 50%;
-            display: inline-flex;
+            display: flex;
             align-items: center;
             justify-content: center;
             font-weight: bold;
             font-size: 14px;
-            margin-right: 10px;
+            flex-shrink: 0;
         }
-        
-        .feature-list {
+
+        .step-content {
+            flex: 1;
+        }
+
+        .step-content strong {
+            color: #2c3e50;
+        }
+
+        .feature-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin: 20px 0;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
         }
-        
+
         .feature-card {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 8px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #fff 100%);
+            padding: 25px;
+            border-radius: 12px;
             border: 1px solid #e9ecef;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
-        
+
+        .feature-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+
         .feature-icon {
-            font-size: 24px;
-            margin-bottom: 10px;
+            font-size: 32px;
+            margin-bottom: 15px;
         }
-        
+
         .feature-title {
             font-weight: bold;
             color: #2c3e50;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
+            font-size: 16px;
         }
-        
+
         .feature-desc {
             color: #6c757d;
             font-size: 14px;
         }
-        
+
+        .tab-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+        }
+
+        .tab-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .tab-icon {
+            width: 40px;
+            height: 40px;
+            background: #667eea;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+        }
+
+        .tab-name {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
         .shortcut-key {
             background: #e9ecef;
-            padding: 2px 6px;
+            padding: 3px 8px;
             border-radius: 4px;
-            font-family: monospace;
+            font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
             font-size: 12px;
+            border: 1px solid #dee2e6;
         }
-        
+
         .back-btn {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #667eea;
-            color: white;
+            background: white;
+            color: #667eea;
             border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
+            padding: 12px 24px;
+            border-radius: 8px;
             cursor: pointer;
             font-size: 14px;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: transform 0.2s;
         }
-        
+
         .back-btn:hover {
-            background: #5a6fd8;
+            transform: scale(1.05);
         }
-        
+
         code {
             background: #f1f3f4;
-            padding: 2px 6px;
+            padding: 3px 8px;
             border-radius: 4px;
-            font-family: 'Courier New', monospace;
+            font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
             color: #d73a49;
+            font-size: 13px;
         }
-        
-        .warning {
+
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 10px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+
+        .info-box {
+            background: #e7f3ff;
+            border: 1px solid #b6d4fe;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 20px 0;
+            display: flex;
+            gap: 12px;
+        }
+
+        .info-box.warning {
             background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 6px;
-            padding: 15px;
-            margin: 15px 0;
+            border-color: #ffeaa7;
         }
-        
-        .warning-icon {
-            color: #856404;
-            margin-right: 8px;
+
+        .info-box.success {
+            background: #d1e7dd;
+            border-color: #a3cfbb;
+        }
+
+        .info-box.tip {
+            background: #f3e8ff;
+            border-color: #d8b4fe;
+        }
+
+        .info-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .info-content {
+            flex: 1;
+        }
+
+        .info-content strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .framework-comparison {
+            overflow-x: auto;
+        }
+
+        .framework-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-playwright { background: #2EAD33; color: white; }
+        .badge-selenium { background: #43B02A; color: white; }
+        .badge-cypress { background: #17202C; color: white; }
+        .badge-puppeteer { background: #40B5A4; color: white; }
+
+        ul, ol {
+            padding-left: 25px;
+        }
+
+        li {
+            margin: 8px 0;
+        }
+
+        a {
+            color: #667eea;
+        }
+
+        .keyboard-shortcuts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .shortcut-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            .toc ul {
+                columns: 1;
+            }
+
+            .back-btn {
+                position: relative;
+                top: auto;
+                right: auto;
+                display: block;
+                width: 100%;
+                margin-bottom: 20px;
+            }
         }
     </style>
 </head>
 <body>
-    <button class="back-btn" onclick="window.close()">← Close</button>
-    
+    <button class="back-btn" onclick="window.close()">Close Help</button>
+
     <div class="container">
         <div class="header">
             <div class="logo">FS</div>
-            <h1>FlowScribe Help</h1>
+            <h1>FlowScribe Documentation</h1>
             <p class="subtitle">AI-Powered Test Automation Recorder</p>
+            <span class="version-badge">Version 2.1.0</span>
         </div>
-        
-        <div class="section">
-            <h2>🚀 Getting Started</h2>
+
+        <!-- Table of Contents -->
+        <div class="toc">
+            <h3>Table of Contents</h3>
+            <ul>
+                <li><a href="#getting-started">Getting Started</a></li>
+                <li><a href="#recording">Recording Tests</a></li>
+                <li><a href="#assertions">Adding Assertions</a></li>
+                <li><a href="#script-generation">Script Generation</a></li>
+                <li><a href="#frameworks">Supported Frameworks</a></li>
+                <li><a href="#ai-features">AI Features</a></li>
+                <li><a href="#settings">Settings & Configuration</a></li>
+                <li><a href="#advanced">Advanced Features</a></li>
+                <li><a href="#tips">Tips & Best Practices</a></li>
+                <li><a href="#troubleshooting">Troubleshooting</a></li>
+                <li><a href="#support">Support</a></li>
+            </ul>
+        </div>
+
+        <!-- Getting Started -->
+        <div class="section" id="getting-started">
+            <h2>Getting Started</h2>
+
+            <p>FlowScribe transforms your browser interactions into production-ready test scripts. Follow these simple steps to create your first test:</p>
+
             <div class="step">
                 <span class="step-number">1</span>
-                <strong>Open a Web Page:</strong> Navigate to the website you want to test
+                <div class="step-content">
+                    <strong>Navigate to Your Application</strong>
+                    <p>Open the web page you want to test in your browser.</p>
+                </div>
             </div>
+
             <div class="step">
                 <span class="step-number">2</span>
-                <strong>Start Recording:</strong> Click the FlowScribe icon and hit "Start Recording"
+                <div class="step-content">
+                    <strong>Open FlowScribe</strong>
+                    <p>Click the FlowScribe icon in your browser toolbar to open the extension popup.</p>
+                </div>
             </div>
+
             <div class="step">
                 <span class="step-number">3</span>
-                <strong>Perform Actions:</strong> Click, type, and navigate as a user would
+                <div class="step-content">
+                    <strong>Select Your Framework</strong>
+                    <p>Choose your preferred testing framework: Playwright, Selenium, Cypress, or Puppeteer.</p>
+                </div>
             </div>
+
             <div class="step">
                 <span class="step-number">4</span>
-                <strong>Stop & Generate:</strong> Stop recording and generate your test script
+                <div class="step-content">
+                    <strong>Start Recording</strong>
+                    <p>Click the "Start Recording" button. A floating indicator will appear on the page.</p>
+                </div>
+            </div>
+
+            <div class="step">
+                <span class="step-number">5</span>
+                <div class="step-content">
+                    <strong>Perform Your Test Actions</strong>
+                    <p>Click buttons, fill forms, navigate pages - FlowScribe captures everything.</p>
+                </div>
+            </div>
+
+            <div class="step">
+                <span class="step-number">6</span>
+                <div class="step-content">
+                    <strong>Stop & Generate Script</strong>
+                    <p>Click "Stop Recording", then "Generate Script" to create your test code.</p>
+                </div>
+            </div>
+
+            <div class="info-box success">
+                <span class="info-icon">✅</span>
+                <div class="info-content">
+                    <strong>Pro Tip</strong>
+                    Your script is ready! Copy it to clipboard or export it as a file.
+                </div>
             </div>
         </div>
-        
-        <div class="section">
-            <h2>✨ Key Features</h2>
-            <div class="feature-list">
+
+        <!-- Recording -->
+        <div class="section" id="recording">
+            <h2>Recording Tests</h2>
+
+            <h3>What Gets Recorded</h3>
+            <p>FlowScribe automatically captures a wide range of user interactions:</p>
+
+            <div class="feature-grid">
                 <div class="feature-card">
-                    <div class="feature-icon">🤖</div>
-                    <div class="feature-title">AI-Enhanced Scripts</div>
-                    <div class="feature-desc">Intelligent script generation with OpenAI, Anthropic, or Google AI</div>
+                    <div class="feature-icon">🖱️</div>
+                    <div class="feature-title">Click Actions</div>
+                    <div class="feature-desc">Buttons, links, checkboxes, radio buttons, and any clickable elements</div>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
-                    <div class="feature-title">Multi-Framework</div>
-                    <div class="feature-desc">Supports Playwright, Selenium, Cypress, and Puppeteer</div>
+                    <div class="feature-icon">⌨️</div>
+                    <div class="feature-title">Text Input</div>
+                    <div class="feature-desc">Form fields, text areas, search boxes, and contenteditable elements</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📝</div>
+                    <div class="feature-title">Form Interactions</div>
+                    <div class="feature-desc">Dropdowns, date pickers, sliders, file uploads, and form submissions</div>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🔄</div>
-                    <div class="feature-title">Self-Healing</div>
-                    <div class="feature-desc">Scripts adapt to UI changes automatically</div>
+                    <div class="feature-title">Navigation</div>
+                    <div class="feature-desc">Page loads, URL changes, back/forward navigation, and redirects</div>
                 </div>
                 <div class="feature-card">
-                    <div class="feature-icon">📱</div>
-                    <div class="feature-title">Cross-Frame</div>
-                    <div class="feature-desc">Records actions across iframes and SPAs</div>
+                    <div class="feature-icon">📜</div>
+                    <div class="feature-title">Scrolling</div>
+                    <div class="feature-desc">Page scrolls and element scrolling within containers</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🖼️</div>
+                    <div class="feature-title">iFrame Support</div>
+                    <div class="feature-desc">Actions inside iframes are captured with proper context</div>
+                </div>
+            </div>
+
+            <h3>Recording Controls</h3>
+            <table>
+                <tr>
+                    <th>Button</th>
+                    <th>Action</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td><strong>Start Recording</strong></td>
+                    <td>Begin capture</td>
+                    <td>Starts recording all user interactions on the current tab</td>
+                </tr>
+                <tr>
+                    <td><strong>Pause</strong></td>
+                    <td>Temporarily stop</td>
+                    <td>Pauses recording without losing captured actions</td>
+                </tr>
+                <tr>
+                    <td><strong>Resume</strong></td>
+                    <td>Continue capture</td>
+                    <td>Resumes recording from where you paused</td>
+                </tr>
+                <tr>
+                    <td><strong>Stop Recording</strong></td>
+                    <td>End capture</td>
+                    <td>Stops recording and prepares actions for script generation</td>
+                </tr>
+            </table>
+
+            <h3>Recording Indicator</h3>
+            <p>When recording is active, a floating indicator appears on your page:</p>
+            <ul>
+                <li><strong>Red pulsing dot</strong> - Recording is active</li>
+                <li><strong>Action counter</strong> - Shows number of captured actions</li>
+                <li><strong>Draggable</strong> - Move it anywhere on the page</li>
+            </ul>
+        </div>
+
+        <!-- Assertions -->
+        <div class="section" id="assertions">
+            <h2>Adding Assertions</h2>
+
+            <p>Assertions validate that your application behaves correctly. FlowScribe provides a visual Assertion Builder to add checks to your tests.</p>
+
+            <div class="tab-section">
+                <div class="tab-header">
+                    <div class="tab-icon">✓</div>
+                    <span class="tab-name">Assertions Tab</span>
+                </div>
+                <p>Access the Assertion Builder by clicking the "Assertions" tab in the FlowScribe popup.</p>
+            </div>
+
+            <h3>Using the Element Picker</h3>
+            <div class="step">
+                <span class="step-number">1</span>
+                <div class="step-content">
+                    <strong>Click "Pick Element"</strong>
+                    <p>This activates the element picker mode on your page.</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">2</span>
+                <div class="step-content">
+                    <strong>Hover Over Elements</strong>
+                    <p>Elements highlight in purple as you hover. A tooltip shows the element's selector.</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">3</span>
+                <div class="step-content">
+                    <strong>Click to Select</strong>
+                    <p>Click the element you want to assert on. A confirmation message appears.</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">4</span>
+                <div class="step-content">
+                    <strong>Configure Assertion</strong>
+                    <p>Reopen FlowScribe popup - the element data is automatically loaded. Choose your assertion type and value.</p>
+                </div>
+            </div>
+
+            <h3>Assertion Types</h3>
+            <table>
+                <tr>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th>Example Use Case</th>
+                </tr>
+                <tr>
+                    <td><strong>Visible</strong></td>
+                    <td>Element is visible on page</td>
+                    <td>Verify success message appears</td>
+                </tr>
+                <tr>
+                    <td><strong>Hidden</strong></td>
+                    <td>Element is not visible</td>
+                    <td>Verify loading spinner disappears</td>
+                </tr>
+                <tr>
+                    <td><strong>Has Text</strong></td>
+                    <td>Element contains specific text</td>
+                    <td>Verify welcome message shows username</td>
+                </tr>
+                <tr>
+                    <td><strong>Has Value</strong></td>
+                    <td>Input field contains value</td>
+                    <td>Verify form field is pre-filled</td>
+                </tr>
+                <tr>
+                    <td><strong>Enabled</strong></td>
+                    <td>Element is interactive</td>
+                    <td>Verify submit button is clickable</td>
+                </tr>
+                <tr>
+                    <td><strong>Disabled</strong></td>
+                    <td>Element is not interactive</td>
+                    <td>Verify button is disabled before form completion</td>
+                </tr>
+                <tr>
+                    <td><strong>Attribute</strong></td>
+                    <td>Element has specific attribute value</td>
+                    <td>Verify link href, image src</td>
+                </tr>
+                <tr>
+                    <td><strong>Count</strong></td>
+                    <td>Number of matching elements</td>
+                    <td>Verify 5 items in list</td>
+                </tr>
+            </table>
+
+            <h3>Assertion Builder Controls</h3>
+            <table>
+                <tr>
+                    <th>Control</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td><strong>Pick Element</strong></td>
+                    <td>Activates visual element picker on the page. Click any element to select it.</td>
+                </tr>
+                <tr>
+                    <td><strong>Manual Entry</strong></td>
+                    <td>Manually type a CSS selector instead of using the element picker.</td>
+                </tr>
+                <tr>
+                    <td><strong>Element Selector (CSS/XPath)</strong></td>
+                    <td>Choose selector type and enter or view the element selector string.</td>
+                </tr>
+                <tr>
+                    <td><strong>Assertion Type Buttons</strong></td>
+                    <td>Select what to verify: Visible, Hidden, Has Text, Has Value, Enabled, Disabled, Attribute, or Count.</td>
+                </tr>
+                <tr>
+                    <td><strong>+ Add Assertion</strong></td>
+                    <td>Adds the configured assertion to your test. Appears in the "Added Assertions" list below.</td>
+                </tr>
+                <tr>
+                    <td><strong>Clear</strong></td>
+                    <td>Resets the assertion form to start fresh.</td>
+                </tr>
+            </table>
+
+            <h3>Managing Assertions</h3>
+            <p>The <strong>Added Assertions</strong> section at the bottom shows all assertions you've created:</p>
+            <ul>
+                <li>View the count badge showing total assertions</li>
+                <li>See each assertion with its selector and type</li>
+                <li>Delete individual assertions using the trash icon</li>
+                <li>Assertions are automatically included in generated scripts</li>
+            </ul>
+
+            <div class="info-box tip">
+                <span class="info-icon">💡</span>
+                <div class="info-content">
+                    <strong>Quick Assertion</strong>
+                    While recording, click the "Add Assertion" button to quickly add assertions without stopping your recording.
                 </div>
             </div>
         </div>
-        
-        <div class="section">
-            <h2>⚙️ Settings & Configuration</h2>
-            <h3>Framework Selection</h3>
-            <p>Choose your preferred testing framework from the dropdown:</p>
+
+        <!-- Script Generation -->
+        <div class="section" id="script-generation">
+            <h2>Script Generation</h2>
+
+            <h3>Generating Your Test Script</h3>
+            <p>After recording, click "Generate Script" to create your test code. The script includes:</p>
             <ul>
-                <li><strong>Playwright:</strong> Modern, fast, reliable testing for web apps</li>
-                <li><strong>Selenium:</strong> Industry standard for cross-browser testing</li>
-                <li><strong>Cypress:</strong> Developer-friendly testing with great debugging</li>
-                <li><strong>Puppeteer:</strong> Chrome-specific automation and testing</li>
+                <li>All recorded user interactions</li>
+                <li>Intelligent element selectors with fallbacks</li>
+                <li>Wait strategies for dynamic content</li>
+                <li>Your custom assertions</li>
+                <li>Framework-specific best practices</li>
             </ul>
-            
-            <h3>AI Configuration</h3>
-            <p>Enable AI enhancement for better script quality:</p>
-            <ul>
-                <li><strong>OpenAI:</strong> GPT-4, GPT-3.5-turbo models</li>
-                <li><strong>Anthropic:</strong> Claude-3, Claude-2 models</li>
-                <li><strong>Google AI:</strong> Gemini Pro, Gemini Pro Vision</li>
-            </ul>
-            
-            <div class="warning">
-                <span class="warning-icon">⚠️</span>
-                <strong>API Keys:</strong> Your API keys are stored locally and never transmitted to our servers.
+
+            <h3>Script Options</h3>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📋</div>
+                    <div class="feature-title">Copy to Clipboard</div>
+                    <div class="feature-desc">One-click copy of the entire script</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💾</div>
+                    <div class="feature-title">Export as File</div>
+                    <div class="feature-desc">Download as .js, .py, or .ts file</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📁</div>
+                    <div class="feature-title">Export with POM</div>
+                    <div class="feature-desc">Include Page Object Model classes</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <div class="feature-title">Export with CI/CD</div>
+                    <div class="feature-desc">Include workflow configuration files</div>
+                </div>
             </div>
         </div>
-        
-        <div class="section">
-            <h2>🔧 Advanced Features</h2>
+
+        <!-- Frameworks -->
+        <div class="section" id="frameworks">
+            <h2>Supported Frameworks</h2>
+
+            <div class="framework-comparison">
+                <table>
+                    <tr>
+                        <th>Framework</th>
+                        <th>Language</th>
+                        <th>Best For</th>
+                        <th>Key Features</th>
+                    </tr>
+                    <tr>
+                        <td><span class="framework-badge badge-playwright">Playwright</span></td>
+                        <td>JavaScript/TypeScript</td>
+                        <td>Modern web apps, cross-browser</td>
+                        <td>Auto-wait, multi-browser, trace viewer</td>
+                    </tr>
+                    <tr>
+                        <td><span class="framework-badge badge-selenium">Selenium</span></td>
+                        <td>Python, Java, C#, JS</td>
+                        <td>Enterprise, legacy browsers</td>
+                        <td>Industry standard, WebDriver protocol</td>
+                    </tr>
+                    <tr>
+                        <td><span class="framework-badge badge-cypress">Cypress</span></td>
+                        <td>JavaScript/TypeScript</td>
+                        <td>Frontend testing, debugging</td>
+                        <td>Time-travel debugging, automatic waiting</td>
+                    </tr>
+                    <tr>
+                        <td><span class="framework-badge badge-puppeteer">Puppeteer</span></td>
+                        <td>JavaScript</td>
+                        <td>Chrome automation, scraping</td>
+                        <td>Direct Chrome DevTools Protocol access</td>
+                    </tr>
+                </table>
+            </div>
+
+            <h3>Framework Selection</h3>
+            <p>Choose your framework using either:</p>
+            <ul>
+                <li><strong>Quick Select Grid</strong> - Click the framework icon in the Record tab</li>
+                <li><strong>Dropdown Menu</strong> - Select from the framework dropdown</li>
+            </ul>
+        </div>
+
+        <!-- AI Features -->
+        <div class="section" id="ai-features">
+            <h2>AI Features</h2>
+
+            <p>FlowScribe integrates with leading AI providers to enhance your test scripts with intelligent improvements.</p>
+
+            <h3>Supported AI Providers</h3>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <div class="feature-title">OpenAI</div>
+                    <div class="feature-desc">GPT-4o, GPT-4o-mini models for powerful script enhancement</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🧠</div>
+                    <div class="feature-title">Anthropic</div>
+                    <div class="feature-desc">Claude 3.5 Sonnet, Claude 3 Opus, Claude 3 Haiku</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">✨</div>
+                    <div class="feature-title">Google AI</div>
+                    <div class="feature-desc">Gemini 1.5 Pro, Gemini 1.5 Flash</div>
+                </div>
+            </div>
+
+            <h3>What AI Enhancement Does</h3>
+            <ul>
+                <li><strong>Intelligent Selectors</strong> - Generates the most stable, maintainable selectors</li>
+                <li><strong>Smart Assertions</strong> - Suggests additional assertions based on context</li>
+                <li><strong>Code Optimization</strong> - Improves code structure and readability</li>
+                <li><strong>Wait Strategies</strong> - Adds appropriate waits for dynamic content</li>
+                <li><strong>Error Handling</strong> - Includes retry logic and error recovery</li>
+            </ul>
+
+            <h3>Setting Up AI</h3>
+            <div class="step">
+                <span class="step-number">1</span>
+                <div class="step-content">
+                    <strong>Open Settings</strong>
+                    <p>Click the gear icon in FlowScribe popup</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">2</span>
+                <div class="step-content">
+                    <strong>Enable AI</strong>
+                    <p>Toggle "Enable AI Enhancement" switch</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">3</span>
+                <div class="step-content">
+                    <strong>Select Provider & Model</strong>
+                    <p>Choose your AI provider and preferred model</p>
+                </div>
+            </div>
+            <div class="step">
+                <span class="step-number">4</span>
+                <div class="step-content">
+                    <strong>Enter API Key</strong>
+                    <p>Paste your API key (encrypted and stored locally)</p>
+                </div>
+            </div>
+
+            <div class="info-box warning">
+                <span class="info-icon">🔒</span>
+                <div class="info-content">
+                    <strong>API Key Security</strong>
+                    Your API keys are encrypted using AES-GCM encryption and stored locally in your browser. They are never transmitted to our servers.
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="section" id="settings">
+            <h2>Settings & Configuration</h2>
+
             <h3>Recording Options</h3>
+            <table>
+                <tr>
+                    <th>Setting</th>
+                    <th>Description</th>
+                    <th>Default</th>
+                </tr>
+                <tr>
+                    <td><strong>Self-Healing</strong></td>
+                    <td>Generate fallback selectors that adapt to UI changes</td>
+                    <td>Enabled</td>
+                </tr>
+                <tr>
+                    <td><strong>Network Recording</strong></td>
+                    <td>Capture API requests and responses</td>
+                    <td>Enabled</td>
+                </tr>
+                <tr>
+                    <td><strong>POM Generation</strong></td>
+                    <td>Create Page Object Model classes</td>
+                    <td>Enabled</td>
+                </tr>
+            </table>
+
+            <h3>CI/CD Integration</h3>
+            <p>FlowScribe can generate configuration files for your CI/CD platform:</p>
             <ul>
-                <li><strong>Self-Healing:</strong> Enable automatic selector healing when elements change</li>
-                <li><strong>Network Recording:</strong> Capture API requests and responses</li>
-                <li><strong>POM Generation:</strong> Create Page Object Model classes</li>
-                <li><strong>CI/CD Integration:</strong> Generate configuration files for your CI/CD platform</li>
-            </ul>
-            
-            <h3>Script Generation Options</h3>
-            <ul>
-                <li><strong>Include Assertions:</strong> Add validation checks to your tests</li>
-                <li><strong>Add Comments:</strong> Include descriptive comments in generated code</li>
-                <li><strong>Screenshots:</strong> Capture screenshots on failure</li>
+                <li><strong>GitHub Actions</strong> - .github/workflows YAML files</li>
+                <li><strong>GitLab CI</strong> - .gitlab-ci.yml configuration</li>
+                <li><strong>Jenkins</strong> - Jenkinsfile pipeline scripts</li>
+                <li><strong>Azure DevOps</strong> - azure-pipelines.yml</li>
+                <li><strong>CircleCI</strong> - .circleci/config.yml</li>
             </ul>
         </div>
-        
-        <div class="section">
-            <h2>💡 Tips & Best Practices</h2>
-            <h3>Recording Tips</h3>
+
+        <!-- Advanced Features -->
+        <div class="section" id="advanced">
+            <h2>Advanced Features</h2>
+
+            <h3>Self-Healing Selectors</h3>
+            <p>FlowScribe's self-healing technology generates multiple selector strategies for each element:</p>
+            <ol>
+                <li><code>data-testid</code> - Highest priority, most stable</li>
+                <li><code>#unique-id</code> - Semantic IDs</li>
+                <li><code>[aria-label]</code> - Accessibility attributes</li>
+                <li><code>[name]</code> - Form element names</li>
+                <li><code>role</code> + context - ARIA roles</li>
+                <li>Text content - Visible text</li>
+                <li>Smart XPath - Multiple fallbacks</li>
+            </ol>
+
+            <h3>Page Object Model (POM)</h3>
+            <p>When enabled, FlowScribe automatically generates Page Object classes that:</p>
             <ul>
-                <li>Use <code>data-testid</code> attributes for the most reliable selectors</li>
-                <li>Record at normal speed - don't rush through actions</li>
-                <li>Test your recordings on different page states</li>
-                <li>Use pause/resume to organize your recording sessions</li>
+                <li>Group related elements by page section</li>
+                <li>Create reusable interaction methods</li>
+                <li>Separate test logic from page structure</li>
+                <li>Follow framework-specific patterns</li>
             </ul>
-            
-            <h3>Generated Script Tips</h3>
+
+            <h3>Network Recording</h3>
+            <p>Capture and mock network requests:</p>
             <ul>
-                <li>Review and customize generated scripts before use</li>
-                <li>Add additional assertions based on your testing needs</li>
-                <li>Use Page Object Models for maintainable tests</li>
-                <li>Consider parameterizing test data for reusability</li>
+                <li>REST API calls with request/response data</li>
+                <li>GraphQL operations with query names</li>
+                <li>Generate mock code for your framework</li>
+            </ul>
+
+            <div class="info-box">
+                <span class="info-icon">ℹ️</span>
+                <div class="info-content">
+                    <strong>Manifest V3 Limitation</strong>
+                    Due to Chrome's Manifest V3 restrictions, request body capture may be limited for some requests.
+                </div>
+            </div>
+
+            <h3>History & Sessions</h3>
+            <p>Access the History tab to:</p>
+            <ul>
+                <li>View past recording sessions</li>
+                <li>Load previous recordings to continue work</li>
+                <li>Delete old sessions</li>
+                <li>Clear all history</li>
             </ul>
         </div>
-        
-        <div class="section">
-            <h2>🐛 Troubleshooting</h2>
+
+        <!-- Tips -->
+        <div class="section" id="tips">
+            <h2>Tips & Best Practices</h2>
+
+            <h3>For Better Recordings</h3>
+            <ul>
+                <li><strong>Use data-testid attributes</strong> - Add <code>data-testid="login-button"</code> to key elements for the most stable selectors</li>
+                <li><strong>Record at normal speed</strong> - Don't rush; let pages fully load between actions</li>
+                <li><strong>Use pause/resume</strong> - Organize complex workflows into logical sections</li>
+                <li><strong>Test multiple scenarios</strong> - Record both happy path and error cases</li>
+            </ul>
+
+            <h3>For Better Scripts</h3>
+            <ul>
+                <li><strong>Review generated code</strong> - Always review and customize scripts before committing</li>
+                <li><strong>Add meaningful assertions</strong> - Don't just record actions; validate outcomes</li>
+                <li><strong>Use Page Objects</strong> - Enable POM generation for maintainable tests</li>
+                <li><strong>Parameterize test data</strong> - Extract hardcoded values into variables</li>
+            </ul>
+
+            <h3>Selector Best Practices</h3>
+            <div class="info-box tip">
+                <span class="info-icon">💡</span>
+                <div class="info-content">
+                    <strong>Selector Priority</strong>
+                    <p>FlowScribe prioritizes selectors in this order for maximum stability:</p>
+                    <code>data-testid</code> > <code>id</code> > <code>aria-label</code> > <code>name</code> > <code>text</code> > <code>css</code>
+                </div>
+            </div>
+        </div>
+
+        <!-- Troubleshooting -->
+        <div class="section" id="troubleshooting">
+            <h2>Troubleshooting</h2>
+
             <h3>Common Issues</h3>
+
+            <h4>Recording doesn't start</h4>
             <ul>
-                <li><strong>Recording doesn't start:</strong> Refresh the page and try again</li>
-                <li><strong>Actions not captured:</strong> Ensure the page is fully loaded</li>
-                <li><strong>Script generation fails:</strong> Check your AI API key configuration</li>
-                <li><strong>Elements not found:</strong> Enable self-healing for better reliability</li>
+                <li>Refresh the page and try again</li>
+                <li>Make sure you're not on a chrome:// or extension page</li>
+                <li>Check that the extension has permission for the site</li>
             </ul>
-            
+
+            <h4>Actions not being captured</h4>
+            <ul>
+                <li>Ensure the page is fully loaded before interacting</li>
+                <li>Check if you're interacting inside an iframe (supported but may need page reload)</li>
+                <li>Some shadow DOM elements may have limited capture</li>
+            </ul>
+
+            <h4>Element picker not working</h4>
+            <ul>
+                <li>The popup closes when you click - this is normal browser behavior</li>
+                <li>After clicking an element, reopen the popup to see the selected element</li>
+                <li>Press ESC to cancel element picker mode</li>
+            </ul>
+
+            <h4>Script generation fails</h4>
+            <ul>
+                <li>Check your AI API key is correct (if using AI enhancement)</li>
+                <li>Ensure you have recorded at least one action</li>
+                <li>Try disabling AI enhancement for template-based generation</li>
+            </ul>
+
+            <h4>Generated selectors don't work</h4>
+            <ul>
+                <li>Enable Self-Healing for fallback selectors</li>
+                <li>Add data-testid attributes to your application</li>
+                <li>Review and adjust selectors in the generated script</li>
+            </ul>
+
             <h3>Browser Compatibility</h3>
-            <p>FlowScribe works best with:</p>
-            <ul>
-                <li>Chrome 88+ (recommended)</li>
-                <li>Chromium-based browsers</li>
-                <li>Latest browser extensions enabled</li>
-            </ul>
+            <table>
+                <tr>
+                    <th>Browser</th>
+                    <th>Support</th>
+                    <th>Notes</th>
+                </tr>
+                <tr>
+                    <td>Chrome 88+</td>
+                    <td>✅ Full</td>
+                    <td>Recommended</td>
+                </tr>
+                <tr>
+                    <td>Firefox 109+</td>
+                    <td>✅ Full</td>
+                    <td>Use Firefox build</td>
+                </tr>
+                <tr>
+                    <td>Edge (Chromium)</td>
+                    <td>✅ Full</td>
+                    <td>Use Chrome build</td>
+                </tr>
+                <tr>
+                    <td>Safari</td>
+                    <td>❌ Not supported</td>
+                    <td>No extension API</td>
+                </tr>
+            </table>
         </div>
-        
-        <div class="section">
-            <h2>📞 Support</h2>
-            <p>Need more help? We're here to assist:</p>
+
+        <!-- Support -->
+        <div class="section" id="support">
+            <h2>Support & Resources</h2>
+
+            <h3>Get Help</h3>
             <ul>
                 <li><strong>GitHub Issues:</strong> <a href="https://github.com/srewoo/FlowScribe/issues" target="_blank">Report bugs or request features</a></li>
                 <li><strong>Email Support:</strong> <a href="mailto:srewoo@gmail.com">srewoo@gmail.com</a></li>
-                <li><strong>GitHub Repository:</strong> <a href="https://github.com/srewoo/FlowScribe" target="_blank">github.com/srewoo/FlowScribe</a></li>
+                <li><strong>Repository:</strong> <a href="https://github.com/srewoo/FlowScribe" target="_blank">github.com/srewoo/FlowScribe</a></li>
             </ul>
-            
-            <div class="warning">
-                <span class="warning-icon">ℹ️</span>
-                FlowScribe is designed with privacy in mind. All recordings are processed locally and your data never leaves your browser unless you explicitly configure AI services.
+
+            <h3>Contributing</h3>
+            <p>FlowScribe is open source! Contributions are welcome:</p>
+            <ul>
+                <li>Fork the repository</li>
+                <li>Create a feature branch</li>
+                <li>Submit a pull request</li>
+            </ul>
+
+            <div class="info-box success">
+                <span class="info-icon">🔒</span>
+                <div class="info-content">
+                    <strong>Privacy First</strong>
+                    FlowScribe is designed with privacy in mind. All recordings are processed locally in your browser. Your data never leaves your machine unless you explicitly use AI services with your own API keys.
+                </div>
             </div>
+
+            <h3>Version History</h3>
+            <table>
+                <tr>
+                    <th>Version</th>
+                    <th>Release</th>
+                    <th>Highlights</th>
+                </tr>
+                <tr>
+                    <td>2.1.0</td>
+                    <td>Current</td>
+                    <td>Assertion Builder, Element Picker, Firefox support, UI redesign</td>
+                </tr>
+                <tr>
+                    <td>2.0.0</td>
+                    <td>Previous</td>
+                    <td>AI integration, Multi-framework support, Self-healing</td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="text-align: center; padding-top: 30px; border-top: 2px solid #f0f0f0; margin-top: 40px; color: #7f8c8d;">
+            <p>Made with ❤️ by the FlowScribe Team</p>
+            <p style="font-size: 12px;">© 2024 FlowScribe. MIT License.</p>
         </div>
     </div>
 </body>

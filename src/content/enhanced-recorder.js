@@ -10,15 +10,38 @@ class EnhancedRecorder {
     this.assertions = [];
     this.pageStates = [];
     this.networkRequests = [];
+    this.consoleErrors = [];
     this.mutationObserver = null;
     this.intersectionObserver = null;
     this.performanceObserver = null;
+    this.dialogObserver = null;
     this.startTime = null;
     this.lastActionTime = null;
     this.elementCache = new WeakMap();
     this.shadowRoots = new Set();
     this.actionId = 0;
     this.sessionId = this.generateSessionId();
+
+    // Gesture tracking state
+    this.touchState = {
+      startTouches: [],
+      startTime: null,
+      lastTapTime: null,
+      lastTapTarget: null,
+      initialPinchDistance: null
+    };
+
+    // Auto-fill detection state
+    this.inputInitialValues = new WeakMap();
+
+    // Keyboard input tracking
+    this.keyboardInputBuffer = new Map();
+
+    // Slider/range tracking
+    this.sliderState = new WeakMap();
+
+    // Dialog/modal tracking
+    this.openDialogs = new Set();
   }
 
   startRecording() {
@@ -80,6 +103,7 @@ class EnhancedRecorder {
       'blur': this.handleBlur.bind(this),
       'submit': this.handleSubmit.bind(this),
       'reset': this.handleReset.bind(this),
+      'invalid': this.handleInvalid.bind(this),
 
       // Scroll events
       'scroll': this.throttle(this.handleScroll.bind(this), 200),
@@ -114,7 +138,13 @@ class EnhancedRecorder {
       'popstate': this.handlePopState.bind(this),
       'hashchange': this.handleHashChange.bind(this),
       'pageshow': this.handlePageShow.bind(this),
-      'pagehide': this.handlePageHide.bind(this)
+      'pagehide': this.handlePageHide.bind(this),
+
+      // Text selection event
+      'selectionchange': this.debounce(this.handleSelectionChange.bind(this), 300),
+
+      // Animation events for auto-fill detection
+      'animationstart': this.handleAnimationStart.bind(this)
     };
 
     // Add listeners with capture to catch events before they bubble
@@ -123,11 +153,36 @@ class EnhancedRecorder {
       this[`${event}Handler`] = handler; // Store for cleanup
     });
 
+    // Window-level events
+    window.addEventListener('focus', this.handleWindowFocus.bind(this));
+    window.addEventListener('blur', this.handleWindowBlur.bind(this));
+
     // Special handling for file inputs
     this.setupFileInputListeners();
 
     // Shadow DOM support
     this.setupShadowDOMListeners();
+
+    // Setup dialog/modal tracking
+    this.setupDialogTracking();
+
+    // Setup auto-fill detection
+    this.setupAutoFillDetection();
+
+    // Setup slider/range tracking
+    this.setupSliderTracking();
+
+    // Setup contenteditable tracking
+    this.setupContentEditableTracking();
+
+    // Setup autocomplete tracking
+    this.setupAutocompleteTracking();
+
+    // Setup console error capture
+    this.setupConsoleErrorCapture();
+
+    // Setup date/time picker tracking
+    this.setupDateTimePickerTracking();
   }
 
   setupObservers() {
@@ -170,10 +225,13 @@ class EnhancedRecorder {
   }
 
   setupNetworkInterception() {
+    // Store reference to recorder instance for use in interceptors
+    const recorder = this;
+
     // Intercept fetch requests
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
-      const requestId = this.generateRequestId();
+      const requestId = recorder.generateRequestId();
       const startTime = performance.now();
 
       const [resource, config] = args;
@@ -186,7 +244,7 @@ class EnhancedRecorder {
         body: config?.body
       };
 
-      this.networkRequests.push({
+      recorder.networkRequests.push({
         type: 'request',
         ...request
       });
@@ -195,7 +253,7 @@ class EnhancedRecorder {
         const response = await originalFetch(...args);
         const responseClone = response.clone();
 
-        this.networkRequests.push({
+        recorder.networkRequests.push({
           type: 'response',
           id: requestId,
           status: response.status,
@@ -207,7 +265,7 @@ class EnhancedRecorder {
         // Capture response body if it's JSON or text
         if (response.headers.get('content-type')?.includes('json')) {
           responseClone.json().then(data => {
-            this.networkRequests.push({
+            recorder.networkRequests.push({
               type: 'response-body',
               id: requestId,
               data
@@ -217,7 +275,7 @@ class EnhancedRecorder {
 
         return response;
       } catch (error) {
-        this.networkRequests.push({
+        recorder.networkRequests.push({
           type: 'error',
           id: requestId,
           error: error.message,
@@ -232,28 +290,29 @@ class EnhancedRecorder {
     const originalXHRSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-      this._requestId = this.generateRequestId();
+      this._requestId = recorder.generateRequestId();
       this._method = method;
       this._url = url;
       return originalXHROpen.apply(this, [method, url, ...rest]);
     };
 
     XMLHttpRequest.prototype.send = function(body) {
+      const xhr = this;
       const requestId = this._requestId;
       const startTime = performance.now();
 
       this.addEventListener('load', () => {
-        this.networkRequests.push({
+        recorder.networkRequests.push({
           type: 'xhr-response',
           id: requestId,
-          status: this.status,
-          statusText: this.statusText,
-          response: this.responseText,
+          status: xhr.status,
+          statusText: xhr.statusText,
+          response: xhr.responseText,
           duration: performance.now() - startTime
         });
       });
 
-      this.networkRequests.push({
+      recorder.networkRequests.push({
         type: 'xhr-request',
         id: requestId,
         method: this._method,
@@ -1042,16 +1101,6 @@ class EnhancedRecorder {
     });
   }
 
-  handleRightClick(event) {
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'right_click',
-      timestamp: Date.now(),
-      target: this.getElementInfo(event.target),
-      position: { x: event.pageX, y: event.pageY }
-    });
-  }
-
   handleMouseDown(event) {
     this.mouseDownTime = Date.now();
     this.mouseDownTarget = event.target;
@@ -1059,24 +1108,14 @@ class EnhancedRecorder {
 
   handleMouseUp(event) {
     if (this.mouseDownTime && Date.now() - this.mouseDownTime > 500) {
-      // Long press
+      // Long press (mouse version)
       this.recordAction({
         id: this.generateActionId(),
         type: 'long_press',
         timestamp: Date.now(),
         target: this.getElementInfo(event.target),
-        duration: Date.now() - this.mouseDownTime
-      });
-    }
-  }
-
-  handleMouseOver(event) {
-    if (event.target.title || event.target.getAttribute('data-tooltip')) {
-      this.recordAction({
-        id: this.generateActionId(),
-        type: 'hover',
-        timestamp: Date.now(),
-        target: this.getElementInfo(event.target)
+        duration: Date.now() - this.mouseDownTime,
+        inputType: 'mouse'
       });
     }
   }
@@ -1102,27 +1141,6 @@ class EnhancedRecorder {
         timestamp: Date.now(),
         position: { x: event.pageX, y: event.pageY },
         buttons: event.buttons
-      });
-    }
-  }
-
-  handleKeyDown(event) {
-    // Track keyboard shortcuts and special keys
-    if (event.ctrlKey || event.metaKey || event.altKey ||
-        ['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
-      this.recordAction({
-        id: this.generateActionId(),
-        type: 'key_down',
-        timestamp: Date.now(),
-        key: event.key,
-        code: event.code,
-        modifiers: {
-          ctrl: event.ctrlKey,
-          shift: event.shiftKey,
-          alt: event.altKey,
-          meta: event.metaKey
-        },
-        target: this.getElementInfo(event.target)
       });
     }
   }
@@ -1264,45 +1282,6 @@ class EnhancedRecorder {
     });
   }
 
-  // Touch events for mobile testing
-  handleTouchStart(event) {
-    this.touchStartTime = Date.now();
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'touch_start',
-      timestamp: Date.now(),
-      touches: Array.from(event.touches).map(t => ({
-        x: t.pageX,
-        y: t.pageY
-      })),
-      target: this.getElementInfo(event.target)
-    });
-  }
-
-  handleTouchEnd(event) {
-    const duration = Date.now() - this.touchStartTime;
-    this.recordAction({
-      id: this.generateActionId(),
-      type: duration > 500 ? 'long_touch' : 'touch_end',
-      timestamp: Date.now(),
-      duration,
-      target: this.getElementInfo(event.target)
-    });
-  }
-
-  handleTouchMove(event) {
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'touch_move',
-      timestamp: Date.now(),
-      touches: Array.from(event.touches).map(t => ({
-        x: t.pageX,
-        y: t.pageY
-      })),
-      target: this.getElementInfo(event.target)
-    });
-  }
-
   // Media events
   handleMediaPlay(event) {
     this.recordAction({
@@ -1328,34 +1307,6 @@ class EnhancedRecorder {
     this.recordAction({
       id: this.generateActionId(),
       type: 'media_ended',
-      timestamp: Date.now(),
-      target: this.getElementInfo(event.target)
-    });
-  }
-
-  // Clipboard events
-  handleCopy(event) {
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'copy',
-      timestamp: Date.now(),
-      target: this.getElementInfo(event.target)
-    });
-  }
-
-  handleCut(event) {
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'cut',
-      timestamp: Date.now(),
-      target: this.getElementInfo(event.target)
-    });
-  }
-
-  handlePaste(event) {
-    this.recordAction({
-      id: this.generateActionId(),
-      type: 'paste',
       timestamp: Date.now(),
       target: this.getElementInfo(event.target)
     });
@@ -1399,6 +1350,1043 @@ class EnhancedRecorder {
     });
   }
 
+  // ============================================
+  // HIGH PRIORITY: Text Selection Tracking
+  // ============================================
+  handleSelectionChange(event) {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      return; // No text selected
+    }
+
+    const selectedText = selection.toString().trim();
+    if (selectedText.length === 0 || selectedText.length > 1000) {
+      return; // Ignore empty or very long selections
+    }
+
+    // Get the anchor node's parent element for context
+    let targetElement = selection.anchorNode;
+    if (targetElement && targetElement.nodeType === Node.TEXT_NODE) {
+      targetElement = targetElement.parentElement;
+    }
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'text_selection',
+      timestamp: Date.now(),
+      selectedText: selectedText.substring(0, 200), // Limit length
+      selectionLength: selectedText.length,
+      target: targetElement ? this.getElementInfo(targetElement) : null,
+      range: {
+        startOffset: selection.anchorOffset,
+        endOffset: selection.focusOffset
+      }
+    });
+  }
+
+  // ============================================
+  // HIGH PRIORITY: Enhanced Hover Tracking
+  // ============================================
+  handleMouseOver(event) {
+    const element = event.target;
+
+    // Track hover on interactive elements
+    const isInteractive = this.isInteractiveElement(element);
+    const hasTooltip = element.title || element.getAttribute('data-tooltip') ||
+                       element.getAttribute('data-tip') || element.getAttribute('aria-describedby');
+    const hasDropdown = element.classList.contains('dropdown') ||
+                        element.getAttribute('aria-haspopup') === 'true' ||
+                        element.getAttribute('role') === 'menuitem';
+
+    if (isInteractive || hasTooltip || hasDropdown) {
+      // Debounce hover events on same element
+      if (this.lastHoverElement === element &&
+          Date.now() - this.lastHoverTime < 500) {
+        return;
+      }
+
+      this.lastHoverElement = element;
+      this.lastHoverTime = Date.now();
+
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'hover',
+        timestamp: Date.now(),
+        target: this.getElementInfo(element),
+        hasTooltip: !!hasTooltip,
+        tooltipText: element.title || element.getAttribute('data-tooltip') || '',
+        isDropdownTrigger: hasDropdown,
+        elementType: this.getInteractiveElementType(element)
+      });
+    }
+  }
+
+  isInteractiveElement(element) {
+    const interactiveTags = ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'LABEL'];
+    const interactiveRoles = ['button', 'link', 'menuitem', 'tab', 'option', 'checkbox', 'radio'];
+
+    return interactiveTags.includes(element.tagName) ||
+           interactiveRoles.includes(element.getAttribute('role')) ||
+           element.onclick !== null ||
+           element.hasAttribute('onclick') ||
+           element.tabIndex >= 0 ||
+           element.classList.contains('btn') ||
+           element.classList.contains('button') ||
+           window.getComputedStyle(element).cursor === 'pointer';
+  }
+
+  getInteractiveElementType(element) {
+    if (element.tagName === 'A') return 'link';
+    if (element.tagName === 'BUTTON' || element.getAttribute('role') === 'button') return 'button';
+    if (element.tagName === 'INPUT') return `input-${element.type || 'text'}`;
+    if (element.tagName === 'SELECT') return 'dropdown';
+    if (element.getAttribute('role') === 'menuitem') return 'menu-item';
+    if (element.getAttribute('role') === 'tab') return 'tab';
+    return 'interactive';
+  }
+
+  // ============================================
+  // HIGH PRIORITY: Modal/Dialog State Tracking
+  // ============================================
+  setupDialogTracking() {
+    // Track native HTML5 dialog elements
+    this.dialogObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'attributes' && mutation.attributeName === 'open') {
+          const dialog = mutation.target;
+          if (dialog.tagName === 'DIALOG') {
+            const isOpen = dialog.hasAttribute('open');
+            this.recordDialogStateChange(dialog, isOpen);
+          }
+        }
+
+        // Track added/removed modal elements
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            this.checkForModalOpen(node);
+          }
+        });
+
+        mutation.removedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            this.checkForModalClose(node);
+          }
+        });
+      });
+    });
+
+    this.dialogObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['open', 'aria-hidden', 'class', 'style']
+    });
+
+    // Track existing dialogs
+    document.querySelectorAll('dialog[open]').forEach((dialog) => {
+      this.openDialogs.add(dialog);
+    });
+  }
+
+  checkForModalOpen(element) {
+    const isModal = this.isModalElement(element);
+    if (isModal && !this.openDialogs.has(element)) {
+      this.openDialogs.add(element);
+      this.recordDialogStateChange(element, true);
+    }
+  }
+
+  checkForModalClose(element) {
+    if (this.openDialogs.has(element)) {
+      this.openDialogs.delete(element);
+      this.recordDialogStateChange(element, false);
+    }
+  }
+
+  isModalElement(element) {
+    if (element.tagName === 'DIALOG') return true;
+
+    const role = element.getAttribute('role');
+    if (role === 'dialog' || role === 'alertdialog') return true;
+
+    const classList = element.className || '';
+    const modalClasses = ['modal', 'dialog', 'popup', 'overlay', 'lightbox', 'drawer'];
+    if (modalClasses.some(cls => classList.toLowerCase().includes(cls))) return true;
+
+    // Check for modal styling
+    const style = window.getComputedStyle(element);
+    if (style.position === 'fixed' &&
+        (style.zIndex > 1000 || element.style.zIndex > 1000)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  recordDialogStateChange(element, isOpen) {
+    this.recordAction({
+      id: this.generateActionId(),
+      type: isOpen ? 'dialog_open' : 'dialog_close',
+      timestamp: Date.now(),
+      target: this.getElementInfo(element),
+      dialogType: element.tagName === 'DIALOG' ? 'native' : 'custom',
+      role: element.getAttribute('role') || 'dialog',
+      ariaLabel: element.getAttribute('aria-label') ||
+                 element.getAttribute('aria-labelledby') || ''
+    });
+  }
+
+  // ============================================
+  // HIGH PRIORITY: Form Validation Tracking
+  // ============================================
+  handleInvalid(event) {
+    const element = event.target;
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'validation_error',
+      timestamp: Date.now(),
+      target: this.getElementInfo(element),
+      validationMessage: element.validationMessage,
+      validity: {
+        valueMissing: element.validity.valueMissing,
+        typeMismatch: element.validity.typeMismatch,
+        patternMismatch: element.validity.patternMismatch,
+        tooLong: element.validity.tooLong,
+        tooShort: element.validity.tooShort,
+        rangeUnderflow: element.validity.rangeUnderflow,
+        rangeOverflow: element.validity.rangeOverflow,
+        stepMismatch: element.validity.stepMismatch,
+        badInput: element.validity.badInput,
+        customError: element.validity.customError
+      },
+      inputType: element.type,
+      inputName: element.name,
+      currentValue: element.type === 'password' ? '[MASKED]' : element.value
+    });
+  }
+
+  // ============================================
+  // HIGH PRIORITY: Auto-fill Detection
+  // ============================================
+  setupAutoFillDetection() {
+    // Method 1: Track animation for webkit autofill
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes flowscribe-autofill-detect {
+        from { opacity: 1; }
+        to { opacity: 1; }
+      }
+      input:-webkit-autofill {
+        animation-name: flowscribe-autofill-detect !important;
+      }
+    `;
+    document.head.appendChild(style);
+
+    // Method 2: Store initial values to compare later
+    document.querySelectorAll('input, select, textarea').forEach((input) => {
+      this.inputInitialValues.set(input, input.value);
+    });
+
+    // Method 3: Periodic check for autofill (fallback)
+    this.autoFillCheckInterval = setInterval(() => {
+      this.checkForAutoFill();
+    }, 1000);
+  }
+
+  handleAnimationStart(event) {
+    if (event.animationName === 'flowscribe-autofill-detect') {
+      const element = event.target;
+      this.recordAutoFill(element);
+    }
+  }
+
+  checkForAutoFill() {
+    document.querySelectorAll('input, select, textarea').forEach((input) => {
+      const initialValue = this.inputInitialValues.get(input);
+      const currentValue = input.value;
+
+      // Check if value changed without user interaction
+      if (initialValue !== currentValue &&
+          !this.recentlyFocusedElements?.has(input)) {
+        // Check for autofill pseudo-class
+        try {
+          if (input.matches(':-webkit-autofill') ||
+              input.matches(':autofill')) {
+            this.recordAutoFill(input);
+            this.inputInitialValues.set(input, currentValue);
+          }
+        } catch (e) {
+          // Selector not supported
+        }
+      }
+    });
+  }
+
+  recordAutoFill(element) {
+    // Avoid duplicate autofill records
+    if (this.lastAutoFilledElement === element &&
+        Date.now() - this.lastAutoFillTime < 1000) {
+      return;
+    }
+
+    this.lastAutoFilledElement = element;
+    this.lastAutoFillTime = Date.now();
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'autofill',
+      timestamp: Date.now(),
+      target: this.getElementInfo(element),
+      fieldName: element.name || element.id,
+      fieldType: element.type,
+      autofilledValue: element.type === 'password' ? '[MASKED]' : element.value
+    });
+  }
+
+  // ============================================
+  // HIGH PRIORITY: Full Keyboard Input Capture
+  // ============================================
+  handleKeyDown(event) {
+    const element = event.target;
+    const isTypingElement = ['INPUT', 'TEXTAREA'].includes(element.tagName) ||
+                            element.isContentEditable;
+
+    // Always track special keys and shortcuts
+    if (event.ctrlKey || event.metaKey || event.altKey ||
+        ['Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+         'Backspace', 'Delete', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'key_down',
+        timestamp: Date.now(),
+        key: event.key,
+        code: event.code,
+        modifiers: {
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+          meta: event.metaKey
+        },
+        target: this.getElementInfo(element),
+        isShortcut: event.ctrlKey || event.metaKey || event.altKey
+      });
+    }
+
+    // Track typed characters for typing pattern
+    if (isTypingElement && event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+      this.trackKeyboardInput(element, event.key);
+    }
+  }
+
+  trackKeyboardInput(element, key) {
+    const elementId = element.id || element.name || this.generateOptimalSelector(element);
+
+    if (!this.keyboardInputBuffer.has(elementId)) {
+      this.keyboardInputBuffer.set(elementId, {
+        element: element,
+        chars: [],
+        startTime: Date.now()
+      });
+    }
+
+    const buffer = this.keyboardInputBuffer.get(elementId);
+    buffer.chars.push(key);
+    buffer.lastTime = Date.now();
+
+    // Flush buffer after 500ms of inactivity
+    clearTimeout(buffer.flushTimeout);
+    buffer.flushTimeout = setTimeout(() => {
+      this.flushKeyboardBuffer(elementId);
+    }, 500);
+  }
+
+  flushKeyboardBuffer(elementId) {
+    const buffer = this.keyboardInputBuffer.get(elementId);
+    if (!buffer || buffer.chars.length === 0) return;
+
+    const typedText = buffer.chars.join('');
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'keyboard_input',
+      timestamp: buffer.startTime,
+      target: this.getElementInfo(buffer.element),
+      typedText: buffer.element.type === 'password' ? '[MASKED]' : typedText,
+      charCount: typedText.length,
+      duration: buffer.lastTime - buffer.startTime,
+      typingSpeed: typedText.length / ((buffer.lastTime - buffer.startTime) / 1000) // chars per second
+    });
+
+    this.keyboardInputBuffer.delete(elementId);
+  }
+
+  // ============================================
+  // MEDIUM PRIORITY: Gesture Detection
+  // ============================================
+  handleTouchStart(event) {
+    this.touchState.startTime = Date.now();
+    this.touchState.startTouches = Array.from(event.touches).map(t => ({
+      x: t.pageX,
+      y: t.pageY,
+      identifier: t.identifier
+    }));
+
+    // Detect pinch start (2 fingers)
+    if (event.touches.length === 2) {
+      this.touchState.initialPinchDistance = this.getPinchDistance(event.touches);
+    }
+
+    // Detect double-tap
+    if (this.touchState.lastTapTime &&
+        Date.now() - this.touchState.lastTapTime < 300 &&
+        this.touchState.lastTapTarget === event.target) {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'double_tap',
+        timestamp: Date.now(),
+        target: this.getElementInfo(event.target),
+        position: { x: event.touches[0].pageX, y: event.touches[0].pageY }
+      });
+      this.touchState.lastTapTime = null;
+      return;
+    }
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'touch_start',
+      timestamp: Date.now(),
+      touches: this.touchState.startTouches,
+      target: this.getElementInfo(event.target),
+      touchCount: event.touches.length
+    });
+  }
+
+  handleTouchEnd(event) {
+    const duration = Date.now() - this.touchState.startTime;
+    const startTouch = this.touchState.startTouches[0];
+    const endTouch = event.changedTouches[0];
+
+    if (!startTouch) return;
+
+    const deltaX = endTouch.pageX - startTouch.x;
+    const deltaY = endTouch.pageY - startTouch.y;
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+    // Detect swipe gesture
+    if (distance > 50 && duration < 500) {
+      const direction = this.getSwipeDirection(deltaX, deltaY);
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'swipe',
+        timestamp: Date.now(),
+        direction: direction,
+        distance: Math.round(distance),
+        velocity: distance / duration,
+        startPosition: { x: startTouch.x, y: startTouch.y },
+        endPosition: { x: endTouch.pageX, y: endTouch.pageY },
+        target: this.getElementInfo(event.target)
+      });
+    }
+    // Detect long press
+    else if (duration > 500 && distance < 20) {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'long_press',
+        timestamp: Date.now(),
+        duration: duration,
+        target: this.getElementInfo(event.target),
+        position: { x: endTouch.pageX, y: endTouch.pageY }
+      });
+    }
+    // Regular tap
+    else if (distance < 20 && duration < 300) {
+      this.touchState.lastTapTime = Date.now();
+      this.touchState.lastTapTarget = event.target;
+
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'tap',
+        timestamp: Date.now(),
+        target: this.getElementInfo(event.target),
+        position: { x: endTouch.pageX, y: endTouch.pageY }
+      });
+    }
+
+    // Reset pinch state
+    this.touchState.initialPinchDistance = null;
+  }
+
+  handleTouchMove(event) {
+    // Detect pinch/zoom gesture
+    if (event.touches.length === 2 && this.touchState.initialPinchDistance) {
+      const currentDistance = this.getPinchDistance(event.touches);
+      const scale = currentDistance / this.touchState.initialPinchDistance;
+
+      if (Math.abs(scale - 1) > 0.1) {
+        this.recordAction({
+          id: this.generateActionId(),
+          type: 'pinch_zoom',
+          timestamp: Date.now(),
+          scale: scale.toFixed(2),
+          direction: scale > 1 ? 'zoom_in' : 'zoom_out',
+          center: this.getPinchCenter(event.touches),
+          target: this.getElementInfo(event.target)
+        });
+
+        // Update initial distance for continuous pinch
+        this.touchState.initialPinchDistance = currentDistance;
+      }
+    } else {
+      // Regular touch move
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'touch_move',
+        timestamp: Date.now(),
+        touches: Array.from(event.touches).map(t => ({
+          x: t.pageX,
+          y: t.pageY
+        })),
+        target: this.getElementInfo(event.target)
+      });
+    }
+  }
+
+  getPinchDistance(touches) {
+    const dx = touches[0].pageX - touches[1].pageX;
+    const dy = touches[0].pageY - touches[1].pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  getPinchCenter(touches) {
+    return {
+      x: (touches[0].pageX + touches[1].pageX) / 2,
+      y: (touches[0].pageY + touches[1].pageY) / 2
+    };
+  }
+
+  getSwipeDirection(deltaX, deltaY) {
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    if (absX > absY) {
+      return deltaX > 0 ? 'right' : 'left';
+    } else {
+      return deltaY > 0 ? 'down' : 'up';
+    }
+  }
+
+  // ============================================
+  // MEDIUM PRIORITY: Contenteditable Support
+  // ============================================
+  setupContentEditableTracking() {
+    // Find all contenteditable elements
+    const contentEditables = document.querySelectorAll('[contenteditable="true"]');
+
+    contentEditables.forEach((element) => {
+      this.attachContentEditableListeners(element);
+    });
+
+    // Watch for new contenteditable elements
+    this.contentEditableObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.getAttribute('contenteditable') === 'true') {
+              this.attachContentEditableListeners(node);
+            }
+            node.querySelectorAll?.('[contenteditable="true"]').forEach((el) => {
+              this.attachContentEditableListeners(el);
+            });
+          }
+        });
+      });
+    });
+
+    this.contentEditableObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  attachContentEditableListeners(element) {
+    if (element._flowscribeContentEditableTracked) return;
+    element._flowscribeContentEditableTracked = true;
+
+    let initialContent = element.innerHTML;
+    let inputTimeout;
+
+    element.addEventListener('input', () => {
+      clearTimeout(inputTimeout);
+      inputTimeout = setTimeout(() => {
+        const newContent = element.innerHTML;
+        if (newContent !== initialContent) {
+          this.recordAction({
+            id: this.generateActionId(),
+            type: 'contenteditable_change',
+            timestamp: Date.now(),
+            target: this.getElementInfo(element),
+            textContent: element.textContent.substring(0, 500),
+            htmlLength: newContent.length,
+            hasFormatting: newContent !== element.textContent
+          });
+          initialContent = newContent;
+        }
+      }, 500);
+    });
+
+    // Track formatting commands
+    element.addEventListener('keydown', (event) => {
+      if ((event.ctrlKey || event.metaKey) &&
+          ['b', 'i', 'u', 'z', 'y'].includes(event.key.toLowerCase())) {
+        this.recordAction({
+          id: this.generateActionId(),
+          type: 'rich_text_format',
+          timestamp: Date.now(),
+          target: this.getElementInfo(element),
+          command: this.getFormatCommand(event.key.toLowerCase()),
+          modifiers: { ctrl: event.ctrlKey, meta: event.metaKey }
+        });
+      }
+    });
+  }
+
+  getFormatCommand(key) {
+    const commands = {
+      'b': 'bold',
+      'i': 'italic',
+      'u': 'underline',
+      'z': 'undo',
+      'y': 'redo'
+    };
+    return commands[key] || key;
+  }
+
+  // ============================================
+  // MEDIUM PRIORITY: Autocomplete Selection
+  // ============================================
+  setupAutocompleteTracking() {
+    // Track datalist selections
+    document.querySelectorAll('input[list]').forEach((input) => {
+      this.attachDatalistListener(input);
+    });
+
+    // Watch for custom autocomplete dropdowns
+    this.autocompleteObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            // Check for common autocomplete patterns
+            if (this.isAutocompleteDropdown(node)) {
+              this.attachAutocompleteDropdownListener(node);
+            }
+          }
+        });
+      });
+    });
+
+    this.autocompleteObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  attachDatalistListener(input) {
+    if (input._flowscribeDatalistTracked) return;
+    input._flowscribeDatalistTracked = true;
+
+    let previousValue = input.value;
+
+    input.addEventListener('change', () => {
+      const datalist = document.getElementById(input.getAttribute('list'));
+      if (datalist) {
+        const selectedOption = Array.from(datalist.options).find(
+          opt => opt.value === input.value
+        );
+
+        if (selectedOption && input.value !== previousValue) {
+          this.recordAction({
+            id: this.generateActionId(),
+            type: 'autocomplete_select',
+            timestamp: Date.now(),
+            target: this.getElementInfo(input),
+            selectedValue: input.value,
+            selectedLabel: selectedOption.label || selectedOption.value,
+            source: 'datalist'
+          });
+          previousValue = input.value;
+        }
+      }
+    });
+  }
+
+  isAutocompleteDropdown(element) {
+    const classList = element.className || '';
+    const autocompletePatterns = [
+      'autocomplete', 'suggestions', 'typeahead', 'dropdown-menu',
+      'search-results', 'options-list', 'combobox-list'
+    ];
+
+    return autocompletePatterns.some(pattern =>
+      classList.toLowerCase().includes(pattern)) ||
+      element.getAttribute('role') === 'listbox';
+  }
+
+  attachAutocompleteDropdownListener(dropdown) {
+    dropdown.addEventListener('click', (event) => {
+      const option = event.target.closest('[role="option"], li, .option, .suggestion');
+      if (option) {
+        this.recordAction({
+          id: this.generateActionId(),
+          type: 'autocomplete_select',
+          timestamp: Date.now(),
+          target: this.getElementInfo(option),
+          selectedValue: option.textContent.trim(),
+          selectedIndex: Array.from(dropdown.children).indexOf(option),
+          source: 'custom'
+        });
+      }
+    }, true);
+  }
+
+  // ============================================
+  // MEDIUM PRIORITY: Slider/Range Tracking
+  // ============================================
+  setupSliderTracking() {
+    document.querySelectorAll('input[type="range"]').forEach((slider) => {
+      this.attachSliderListeners(slider);
+    });
+
+    // Watch for new sliders
+    this.sliderObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.matches('input[type="range"]')) {
+              this.attachSliderListeners(node);
+            }
+            node.querySelectorAll?.('input[type="range"]').forEach((slider) => {
+              this.attachSliderListeners(slider);
+            });
+          }
+        });
+      });
+    });
+
+    this.sliderObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  attachSliderListeners(slider) {
+    if (slider._flowscribeSliderTracked) return;
+    slider._flowscribeSliderTracked = true;
+
+    slider.addEventListener('mousedown', () => {
+      this.sliderState.set(slider, {
+        startValue: slider.value,
+        startTime: Date.now(),
+        isDragging: true
+      });
+    });
+
+    slider.addEventListener('touchstart', () => {
+      this.sliderState.set(slider, {
+        startValue: slider.value,
+        startTime: Date.now(),
+        isDragging: true
+      });
+    });
+
+    const recordSliderChange = () => {
+      const state = this.sliderState.get(slider);
+      if (state && state.isDragging) {
+        this.recordAction({
+          id: this.generateActionId(),
+          type: 'slider_change',
+          timestamp: Date.now(),
+          target: this.getElementInfo(slider),
+          startValue: parseFloat(state.startValue),
+          endValue: parseFloat(slider.value),
+          min: parseFloat(slider.min) || 0,
+          max: parseFloat(slider.max) || 100,
+          step: parseFloat(slider.step) || 1,
+          duration: Date.now() - state.startTime,
+          percentChange: ((slider.value - state.startValue) / (slider.max - slider.min)) * 100
+        });
+        state.isDragging = false;
+      }
+    };
+
+    slider.addEventListener('mouseup', recordSliderChange);
+    slider.addEventListener('touchend', recordSliderChange);
+    slider.addEventListener('change', recordSliderChange);
+  }
+
+  // ============================================
+  // MEDIUM PRIORITY: Date/Time Picker Tracking
+  // ============================================
+  setupDateTimePickerTracking() {
+    const dateTimeTypes = ['date', 'time', 'datetime-local', 'month', 'week'];
+
+    dateTimeTypes.forEach((type) => {
+      document.querySelectorAll(`input[type="${type}"]`).forEach((input) => {
+        this.attachDateTimeListener(input);
+      });
+    });
+
+    // Watch for new date/time inputs
+    this.dateTimeObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            dateTimeTypes.forEach((type) => {
+              if (node.matches?.(`input[type="${type}"]`)) {
+                this.attachDateTimeListener(node);
+              }
+              node.querySelectorAll?.(`input[type="${type}"]`).forEach((input) => {
+                this.attachDateTimeListener(input);
+              });
+            });
+          }
+        });
+      });
+    });
+
+    this.dateTimeObserver.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  attachDateTimeListener(input) {
+    if (input._flowscribeDateTimeTracked) return;
+    input._flowscribeDateTimeTracked = true;
+
+    let previousValue = input.value;
+
+    input.addEventListener('change', () => {
+      if (input.value !== previousValue) {
+        this.recordAction({
+          id: this.generateActionId(),
+          type: 'datetime_select',
+          timestamp: Date.now(),
+          target: this.getElementInfo(input),
+          inputType: input.type,
+          previousValue: previousValue,
+          newValue: input.value,
+          formattedValue: this.formatDateTimeValue(input.type, input.value)
+        });
+        previousValue = input.value;
+      }
+    });
+  }
+
+  formatDateTimeValue(type, value) {
+    if (!value) return '';
+
+    try {
+      switch (type) {
+        case 'date':
+          return new Date(value).toLocaleDateString();
+        case 'time':
+          return value;
+        case 'datetime-local':
+          return new Date(value).toLocaleString();
+        case 'month':
+          const [year, month] = value.split('-');
+          return `${new Date(year, month - 1).toLocaleString('default', { month: 'long' })} ${year}`;
+        case 'week':
+          return value;
+        default:
+          return value;
+      }
+    } catch (e) {
+      return value;
+    }
+  }
+
+  // ============================================
+  // LOW PRIORITY: Console Error Capture
+  // ============================================
+  setupConsoleErrorCapture() {
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    console.error = (...args) => {
+      this.captureConsoleMessage('error', args);
+      originalError.apply(console, args);
+    };
+
+    console.warn = (...args) => {
+      this.captureConsoleMessage('warning', args);
+      originalWarn.apply(console, args);
+    };
+
+    // Capture unhandled errors
+    window.addEventListener('error', (event) => {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'javascript_error',
+        timestamp: Date.now(),
+        message: event.message,
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+        stack: event.error?.stack
+      });
+    });
+
+    // Capture unhandled promise rejections
+    window.addEventListener('unhandledrejection', (event) => {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'unhandled_promise_rejection',
+        timestamp: Date.now(),
+        reason: String(event.reason),
+        stack: event.reason?.stack
+      });
+    });
+  }
+
+  captureConsoleMessage(level, args) {
+    const message = args.map(arg => {
+      if (typeof arg === 'object') {
+        try {
+          return JSON.stringify(arg);
+        } catch {
+          return String(arg);
+        }
+      }
+      return String(arg);
+    }).join(' ');
+
+    this.consoleErrors.push({
+      id: this.generateActionId(),
+      type: `console_${level}`,
+      timestamp: Date.now(),
+      message: message.substring(0, 500),
+      url: window.location.href
+    });
+
+    // Also record as action for significant errors
+    if (level === 'error') {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'console_error',
+        timestamp: Date.now(),
+        message: message.substring(0, 500)
+      });
+    }
+  }
+
+  // ============================================
+  // LOW PRIORITY: Clipboard Content Capture
+  // ============================================
+  handleCopy(event) {
+    const selection = window.getSelection();
+    const copiedText = selection ? selection.toString() : '';
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'copy',
+      timestamp: Date.now(),
+      target: this.getElementInfo(event.target),
+      copiedText: copiedText.substring(0, 200), // Limit for privacy
+      textLength: copiedText.length
+    });
+  }
+
+  handleCut(event) {
+    const selection = window.getSelection();
+    const cutText = selection ? selection.toString() : '';
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'cut',
+      timestamp: Date.now(),
+      target: this.getElementInfo(event.target),
+      cutText: cutText.substring(0, 200),
+      textLength: cutText.length
+    });
+  }
+
+  handlePaste(event) {
+    let pastedText = '';
+
+    // Try to get pasted content from clipboard data
+    if (event.clipboardData) {
+      pastedText = event.clipboardData.getData('text/plain');
+    }
+
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'paste',
+      timestamp: Date.now(),
+      target: this.getElementInfo(event.target),
+      pastedText: pastedText.substring(0, 200), // Limit for privacy
+      textLength: pastedText.length,
+      hasHtml: event.clipboardData?.types?.includes('text/html'),
+      hasFiles: event.clipboardData?.files?.length > 0
+    });
+  }
+
+  // ============================================
+  // LOW PRIORITY: Window Focus/Blur Tracking
+  // ============================================
+  handleWindowFocus(event) {
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'window_focus',
+      timestamp: Date.now(),
+      url: window.location.href,
+      title: document.title,
+      wasHidden: document.hidden
+    });
+  }
+
+  handleWindowBlur(event) {
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'window_blur',
+      timestamp: Date.now(),
+      url: window.location.href,
+      activeElement: document.activeElement ?
+        this.getElementInfo(document.activeElement) : null
+    });
+  }
+
+  // ============================================
+  // LOW PRIORITY: Context Menu Selection
+  // ============================================
+  handleRightClick(event) {
+    this.recordAction({
+      id: this.generateActionId(),
+      type: 'right_click',
+      timestamp: Date.now(),
+      target: this.getElementInfo(event.target),
+      position: { x: event.pageX, y: event.pageY },
+      selectedText: window.getSelection()?.toString() || ''
+    });
+
+    // Track when context menu closes and user might have selected an option
+    // This is limited because we can't capture native context menu selections
+    this.contextMenuOpenTime = Date.now();
+    this.contextMenuTarget = event.target;
+  }
+
+  // ============================================
+  // Utility: Debounce function
+  // ============================================
+  debounce(func, delay) {
+    let timeoutId;
+    return function(...args) {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(this, args), delay);
+    };
+  }
+
   stopRecording() {
     this.isRecording = false;
 
@@ -1408,6 +2396,10 @@ class EnhancedRecorder {
         document.removeEventListener(key.replace('Handler', ''), this[key], true);
       }
     });
+
+    // Clean up window event listeners
+    window.removeEventListener('focus', this.handleWindowFocus);
+    window.removeEventListener('blur', this.handleWindowBlur);
 
     // Clean up observers
     if (this.mutationObserver) {
@@ -1419,6 +2411,31 @@ class EnhancedRecorder {
     if (this.performanceObserver) {
       this.performanceObserver.disconnect();
     }
+    if (this.dialogObserver) {
+      this.dialogObserver.disconnect();
+    }
+    if (this.contentEditableObserver) {
+      this.contentEditableObserver.disconnect();
+    }
+    if (this.autocompleteObserver) {
+      this.autocompleteObserver.disconnect();
+    }
+    if (this.sliderObserver) {
+      this.sliderObserver.disconnect();
+    }
+    if (this.dateTimeObserver) {
+      this.dateTimeObserver.disconnect();
+    }
+
+    // Clean up intervals
+    if (this.autoFillCheckInterval) {
+      clearInterval(this.autoFillCheckInterval);
+    }
+
+    // Flush any pending keyboard input buffers
+    this.keyboardInputBuffer.forEach((buffer, elementId) => {
+      this.flushKeyboardBuffer(elementId);
+    });
 
     // Remove recording indicator
     const indicator = document.getElementById('flowscribe-indicator');
@@ -1434,6 +2451,7 @@ class EnhancedRecorder {
         assertions: this.assertions,
         networkRequests: this.networkRequests,
         pageStates: this.pageStates,
+        consoleErrors: this.consoleErrors,
         duration: Date.now() - this.startTime
       }
     });

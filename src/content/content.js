@@ -564,6 +564,14 @@ class FlowScribeRecorder {
             .then(screenshot => sendResponse({ success: true, screenshot }))
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true;
+        case 'START_ELEMENT_PICKER':
+          this.startElementPicker();
+          sendResponse({ success: true });
+          break;
+        case 'STOP_ELEMENT_PICKER':
+          this.stopElementPicker();
+          sendResponse({ success: true });
+          break;
       }
     });
 
@@ -1707,6 +1715,417 @@ class FlowScribeRecorder {
     }
     
     return suggestions.sort((a, b) => b.priority - a.priority).slice(0, 5);
+  }
+
+  // ===== Element Picker for Assertion Builder =====
+
+  /**
+   * Start element picker mode
+   * Creates an overlay and allows user to click any element
+   */
+  startElementPicker() {
+    if (this.isPickerActive) return;
+
+    this.isPickerActive = true;
+    this.pickerOverlay = null;
+    this.highlightedElement = null;
+
+    // Inject picker styles
+    this.injectPickerStyles();
+
+    // Create picker overlay/indicator
+    this.createPickerIndicator();
+
+    // Add event listeners
+    this.pickerMouseMoveHandler = this.handlePickerMouseMove.bind(this);
+    this.pickerClickHandler = this.handlePickerClick.bind(this);
+    this.pickerKeyHandler = this.handlePickerKeyPress.bind(this);
+
+    document.addEventListener('mousemove', this.pickerMouseMoveHandler, true);
+    document.addEventListener('click', this.pickerClickHandler, true);
+    document.addEventListener('keydown', this.pickerKeyHandler, true);
+
+    Logger.log('🎯 Element picker started');
+  }
+
+  /**
+   * Stop element picker mode
+   */
+  stopElementPicker() {
+    if (!this.isPickerActive) return;
+
+    this.isPickerActive = false;
+
+    // Remove event listeners
+    document.removeEventListener('mousemove', this.pickerMouseMoveHandler, true);
+    document.removeEventListener('click', this.pickerClickHandler, true);
+    document.removeEventListener('keydown', this.pickerKeyHandler, true);
+
+    // Remove highlight
+    this.removePickerHighlight();
+
+    // Remove indicator
+    this.removePickerIndicator();
+
+    // Remove styles
+    const styles = document.getElementById('flowscribe-picker-styles');
+    if (styles) styles.remove();
+
+    Logger.log('🎯 Element picker stopped');
+  }
+
+  /**
+   * Inject CSS styles for element picker
+   */
+  injectPickerStyles() {
+    if (document.getElementById('flowscribe-picker-styles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'flowscribe-picker-styles';
+    style.textContent = `
+      .flowscribe-picker-highlight {
+        outline: 3px solid #6366f1 !important;
+        outline-offset: 2px !important;
+        background-color: rgba(99, 102, 241, 0.1) !important;
+        cursor: crosshair !important;
+        transition: outline-color 0.15s ease !important;
+      }
+
+      .flowscribe-picker-indicator {
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 2147483647;
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+        color: white;
+        padding: 12px 24px;
+        border-radius: 9999px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.4);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        animation: flowscribe-picker-fadeIn 0.3s ease;
+      }
+
+      .flowscribe-picker-indicator .picker-dot {
+        width: 10px;
+        height: 10px;
+        background: #22c55e;
+        border-radius: 50%;
+        animation: flowscribe-picker-pulse 1.5s infinite;
+      }
+
+      @keyframes flowscribe-picker-fadeIn {
+        from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+        to { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
+
+      @keyframes flowscribe-picker-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.7; transform: scale(1.2); }
+      }
+
+      .flowscribe-picker-tooltip {
+        position: fixed;
+        z-index: 2147483646;
+        background: #1e1e1e;
+        color: #fff;
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-family: 'Monaco', 'Menlo', monospace;
+        font-size: 12px;
+        max-width: 400px;
+        word-wrap: break-word;
+        pointer-events: none;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /**
+   * Create picker indicator at top of page
+   */
+  createPickerIndicator() {
+    this.pickerIndicator = document.createElement('div');
+    this.pickerIndicator.className = 'flowscribe-picker-indicator';
+    this.pickerIndicator.innerHTML = `
+      <span class="picker-dot"></span>
+      <span>Click any element to select it • Press ESC to cancel</span>
+    `;
+    document.body.appendChild(this.pickerIndicator);
+
+    // Create tooltip for selector preview
+    this.pickerTooltip = document.createElement('div');
+    this.pickerTooltip.className = 'flowscribe-picker-tooltip';
+    this.pickerTooltip.style.display = 'none';
+    document.body.appendChild(this.pickerTooltip);
+  }
+
+  /**
+   * Remove picker indicator
+   */
+  removePickerIndicator() {
+    if (this.pickerIndicator) {
+      this.pickerIndicator.remove();
+      this.pickerIndicator = null;
+    }
+    if (this.pickerTooltip) {
+      this.pickerTooltip.remove();
+      this.pickerTooltip = null;
+    }
+  }
+
+  /**
+   * Handle mouse move during picker mode
+   */
+  handlePickerMouseMove(event) {
+    if (!this.isPickerActive) return;
+
+    const element = event.target;
+
+    // Skip our own UI elements
+    if (element.closest('.flowscribe-picker-indicator') ||
+        element.closest('.flowscribe-picker-tooltip') ||
+        element.closest('#flowscribe-recording-indicator')) {
+      return;
+    }
+
+    // Update highlight
+    if (this.highlightedElement !== element) {
+      this.removePickerHighlight();
+      this.highlightedElement = element;
+      element.classList.add('flowscribe-picker-highlight');
+
+      // Update tooltip with selector preview
+      this.updatePickerTooltip(element, event);
+    } else {
+      // Just update tooltip position
+      this.updateTooltipPosition(event);
+    }
+  }
+
+  /**
+   * Update picker tooltip with element info
+   */
+  updatePickerTooltip(element, event) {
+    if (!this.pickerTooltip) return;
+
+    const selector = this.generateCSSSelector(element);
+    const tagName = element.tagName.toLowerCase();
+    const id = element.id ? `#${element.id}` : '';
+    const classes = element.className && typeof element.className === 'string'
+      ? '.' + element.className.split(' ').filter(c => c).slice(0, 2).join('.')
+      : '';
+
+    this.pickerTooltip.innerHTML = `
+      <div style="color: #a78bfa;">&lt;${tagName}${id}${classes}&gt;</div>
+      <div style="color: #94a3b8; margin-top: 4px; font-size: 11px;">${selector.substring(0, 60)}${selector.length > 60 ? '...' : ''}</div>
+    `;
+    this.pickerTooltip.style.display = 'block';
+    this.updateTooltipPosition(event);
+  }
+
+  /**
+   * Update tooltip position
+   */
+  updateTooltipPosition(event) {
+    if (!this.pickerTooltip) return;
+
+    const x = event.clientX + 15;
+    const y = event.clientY + 15;
+
+    // Keep tooltip in viewport
+    const tooltipRect = this.pickerTooltip.getBoundingClientRect();
+    const maxX = window.innerWidth - tooltipRect.width - 20;
+    const maxY = window.innerHeight - tooltipRect.height - 20;
+
+    this.pickerTooltip.style.left = Math.min(x, maxX) + 'px';
+    this.pickerTooltip.style.top = Math.min(y, maxY) + 'px';
+  }
+
+  /**
+   * Remove picker highlight from element
+   */
+  removePickerHighlight() {
+    if (this.highlightedElement) {
+      this.highlightedElement.classList.remove('flowscribe-picker-highlight');
+      this.highlightedElement = null;
+    }
+    if (this.pickerTooltip) {
+      this.pickerTooltip.style.display = 'none';
+    }
+  }
+
+  /**
+   * Handle click during picker mode
+   */
+  handlePickerClick(event) {
+    if (!this.isPickerActive) return;
+
+    const element = event.target;
+
+    // Skip our own UI elements
+    if (element.closest('.flowscribe-picker-indicator') ||
+        element.closest('.flowscribe-picker-tooltip') ||
+        element.closest('#flowscribe-recording-indicator')) {
+      return;
+    }
+
+    // Prevent default action and propagation
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    // Extract element data
+    const elementData = this.extractPickedElementData(element);
+
+    // Store in chrome.storage for popup to retrieve
+    chrome.storage.local.set({
+      pickedElement: elementData,
+      pickedElementTimestamp: Date.now()
+    }, () => {
+      Logger.log('🎯 Element picked and stored:', elementData);
+    });
+
+    // Also send message to background (for any listeners)
+    chrome.runtime.sendMessage({
+      type: 'ELEMENT_PICKED',
+      data: elementData
+    }).catch(() => {
+      // Popup might be closed, that's okay - data is in storage
+    });
+
+    // Stop picker mode
+    this.stopElementPicker();
+
+    // Show brief confirmation
+    this.showPickerConfirmation(element);
+  }
+
+  /**
+   * Handle key press during picker mode
+   */
+  handlePickerKeyPress(event) {
+    if (!this.isPickerActive) return;
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.stopElementPicker();
+
+      // Clear any stored picked element
+      chrome.storage.local.remove(['pickedElement', 'pickedElementTimestamp']);
+    }
+  }
+
+  /**
+   * Extract comprehensive data from picked element
+   */
+  extractPickedElementData(element) {
+    const testAttrs = this.extractTestAttributes(element);
+    const cssSelector = this.generateCSSSelector(element);
+    const xpath = this.generateXPath(element);
+
+    return {
+      tagName: element.tagName,
+      id: element.id || null,
+      className: element.className || null,
+      name: element.name || null,
+      type: element.type || null,
+      textContent: element.textContent?.trim().substring(0, 200) || null,
+      value: element.value || null,
+      placeholder: element.placeholder || null,
+      href: element.href || null,
+      src: element.src || null,
+      cssSelector: cssSelector,
+      xpath: xpath,
+      testId: testAttrs['data-testid'] || testAttrs['data-test'] || testAttrs['data-cy'] || null,
+      ariaLabel: element.getAttribute('aria-label') || null,
+      role: element.getAttribute('role') || null,
+      attributes: this.extractAttributes(element),
+      rect: {
+        top: element.getBoundingClientRect().top,
+        left: element.getBoundingClientRect().left,
+        width: element.getBoundingClientRect().width,
+        height: element.getBoundingClientRect().height
+      },
+      locatorSuggestions: this.generateLocatorSuggestions(element)
+    };
+  }
+
+  /**
+   * Extract relevant attributes from element
+   */
+  extractAttributes(element) {
+    const attrs = {};
+    const relevantAttrs = [
+      'data-testid', 'data-test', 'data-cy', 'data-qa',
+      'aria-label', 'aria-describedby', 'aria-labelledby',
+      'role', 'name', 'type', 'placeholder', 'title', 'alt',
+      'href', 'src', 'action', 'method', 'for'
+    ];
+
+    relevantAttrs.forEach(attr => {
+      const value = element.getAttribute(attr);
+      if (value) attrs[attr] = value;
+    });
+
+    return attrs;
+  }
+
+  /**
+   * Show brief confirmation that element was picked
+   */
+  showPickerConfirmation(element) {
+    const confirmation = document.createElement('div');
+    confirmation.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2147483647;
+      background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+      color: white;
+      padding: 16px 32px;
+      border-radius: 12px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 16px;
+      font-weight: 600;
+      box-shadow: 0 10px 25px -5px rgba(34, 197, 94, 0.4);
+      animation: flowscribe-confirm 0.5s ease forwards;
+    `;
+    confirmation.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <span>Element Selected!</span>
+      </div>
+      <div style="font-size: 12px; margin-top: 8px; opacity: 0.9;">Open FlowScribe popup to configure assertion</div>
+    `;
+
+    // Add animation keyframes
+    const animStyle = document.createElement('style');
+    animStyle.textContent = `
+      @keyframes flowscribe-confirm {
+        0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+        50% { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+        100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+      }
+    `;
+    document.head.appendChild(animStyle);
+    document.body.appendChild(confirmation);
+
+    // Remove after animation
+    setTimeout(() => {
+      confirmation.remove();
+      animStyle.remove();
+    }, 2000);
   }
 }
 

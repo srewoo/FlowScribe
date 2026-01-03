@@ -1,13 +1,18 @@
 {
   "name": "flowscribe",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Navigation to Automation",
   "main": "manifest.json",
   "scripts": {
-    "build": "webpack --mode=production",
+    "build:chrome": "BROWSER=chrome webpack --mode=production",
+    "build:firefox": "BROWSER=firefox webpack --mode=production",
+    "build:edge": "BROWSER=edge webpack --mode=production",
+    "build:all": "npm run build:chrome && npm run build:firefox && npm run build:edge",
     "package": "npm run build && node scripts/create-zip.js",
-    "dev": "webpack --mode=development --watch",
-    "clean": "rimraf dist package",
+    "package:all": "npm run build:all && node scripts/create-zip.js --all",
+    "dev": "BROWSER=chrome webpack --mode=development --watch",
+    "dev:firefox": "BROWSER=firefox webpack --mode=development --watch",
+    "clean": "rimraf dist-chrome dist-firefox dist-edge package",
     "test": "jest"
   },
   "keywords": [

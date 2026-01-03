@@ -26,6 +26,12 @@ coverage/
 dist/
 build/
 out/
+dist-firefox/
+dist-edge/
+dist-chrome/
+dist-firefox/
+dist-edge/
+
 
 # Webpack build artifacts
 *.bundle.js
