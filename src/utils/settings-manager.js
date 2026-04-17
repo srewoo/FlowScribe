@@ -6,7 +6,7 @@ class SettingsManager {
       selectedFramework: 'playwright', 
       enableAI: false, 
       aiProvider: 'openai',
-      aiModel: 'gpt-4o-mini', 
+      aiModel: 'gpt-4.1-mini',
       apiKey: '', 
       includeScreenshots: true,
       includeAssertions: true, 
@@ -14,8 +14,7 @@ class SettingsManager {
       theme: 'light',
       enableSelfHealing: true, 
       enableNetworkRecording: true,
-      selfHealingConfidence: 0.7, 
-      cicdPlatform: 'github-actions'
+      selfHealingConfidence: 0.7
     };
   }
 

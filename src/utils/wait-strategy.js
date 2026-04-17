@@ -15,7 +15,12 @@ class WaitStrategyEngine {
   }
 
   /**
-   * Analyze action and determine optimal wait strategies
+   * Analyze action and determine optimal wait strategies by combining
+   * action type, element properties, page context, and transition analysis.
+   * @param {{ type: string, target?: object, url?: string, tabId?: string }} action - The current user action being analyzed
+   * @param {{ type: string, target?: object, url?: string, tabId?: string } | null} previousAction - The preceding action for transition analysis, or null if first action
+   * @param {{ framework?: string, hasPushState?: boolean, hasRouter?: boolean, ajaxRequestCount?: number, hasWebSocket?: boolean, hasEventSource?: boolean, ajaxPatterns?: string[] } | null} pageContext - Contextual information about the current page environment
+   * @returns {Array<{ type: string, timeout?: number, selector?: string, conditions?: string[], waits?: Array, description?: string }>} Optimized and prioritized array of wait strategy objects
    */
   determineWaitStrategy(action, previousAction, pageContext) {
     const strategies = [];
@@ -40,6 +45,12 @@ class WaitStrategyEngine {
     return this.optimizeStrategies(strategies);
   }
 
+  /**
+   * Determine the wait strategy based on the action type (click, input, navigate, etc.).
+   * Maps each action type to a predefined strategy with appropriate wait conditions.
+   * @param {{ type: string, target?: { selector?: string }, source?: { element?: { selector?: string } } }} action - The user action to look up
+   * @returns {{ type: string, waits?: Array<{ type: string, selector?: string, duration?: number, afterAction?: boolean, timeout?: number, optional?: boolean }>, conditions?: string[], timeout?: number, selector?: string, stable?: boolean } | undefined} A strategy object for the action type, or undefined if no strategy is defined
+   */
   getActionTypeStrategy(action) {
     const strategies = {
       click: {
@@ -92,6 +103,12 @@ class WaitStrategyEngine {
     return strategies[action.type];
   }
 
+  /**
+   * Analyze a target element's properties to build element-specific wait strategies.
+   * Checks for dynamic content, async loading, animations, and form readiness.
+   * @param {{ selector?: string, tagName?: string, className?: string, attributes?: Object, styles?: { animation?: string, transition?: string } } | null} target - The target element metadata to analyze
+   * @returns {{ type: string, waits: Array<{ type: string, selector?: string, duration?: number, timeout?: number, description: string }> } | null} A composite strategy object with element-specific waits, or null if target is falsy or no strategies apply
+   */
   getElementStrategy(target) {
     if (!target) return null;
 
@@ -312,6 +329,13 @@ class WaitStrategyEngine {
     });
   }
 
+  /**
+   * Calculate an appropriate timeout value in milliseconds for a given wait strategy
+   * based on its type. Uses predefined timeout mappings for common strategy types,
+   * falling back to 5000ms for unknown types.
+   * @param {{ type: string }} strategy - The wait strategy to calculate a timeout for
+   * @returns {number} Timeout duration in milliseconds
+   */
   calculateSmartTimeout(strategy) {
     const timeouts = {
       'element_exists': 5000,
@@ -331,6 +355,14 @@ class WaitStrategyEngine {
   }
 
   // Helper methods
+
+  /**
+   * Determine if a target element is dynamically rendered by checking for
+   * framework-specific conditional rendering attributes (e.g., v-if, ng-if, *ngIf)
+   * or data-dynamic/dynamic class markers.
+   * @param {{ attributes?: Object, className?: string }} target - The target element metadata
+   * @returns {boolean} True if the element appears to be dynamically rendered
+   */
   isDynamicElement(target) {
     return target.attributes?.['data-dynamic'] ||
            target.className?.includes('dynamic') ||
@@ -351,6 +383,12 @@ class WaitStrategyEngine {
            target.className?.match(/fade|slide|animate|transition/);
   }
 
+  /**
+   * Determine if a target element is a form-related element based on its tag name.
+   * Matches input, select, textarea, and form elements.
+   * @param {{ tagName?: string }} target - The target element metadata
+   * @returns {boolean} True if the element is a form-related element
+   */
   isFormElement(target) {
     const tagName = (target.tagName || '').toLowerCase();
     return ['input', 'select', 'textarea', 'form'].includes(tagName);
@@ -648,7 +686,7 @@ class NetworkWaitStrategy {
       playwright: () => `await page.waitForLoadState('networkidle', { timeout: ${strategy.timeout} });`,
       selenium: () => `// Wait for network idle - implement custom wait`,
       cypress: () => `cy.intercept('**').as('requests');\ncy.wait('@requests', { timeout: ${strategy.timeout} });`,
-      puppeteer: () => `await page.waitForLoadState('networkidle0', { timeout: ${strategy.timeout} });`
+      puppeteer: () => `await page.waitForNavigation({ waitUntil: 'networkidle0', timeout: ${strategy.timeout} });`
     };
 
     return generators[framework]();
@@ -739,7 +777,5 @@ await page.waitForFunction(
   }
 }
 
-// Export for use in extension
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = WaitStrategyEngine;
-}
+// ESM export for webpack/service worker
+export { WaitStrategyEngine };

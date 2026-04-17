@@ -13,7 +13,6 @@ module.exports = {
     content: './src/content/content.js',
     'enhanced-recorder': './src/content/enhanced-recorder.js',
     'assertion-generator': './src/utils/assertion-generator.js',
-    'test-generator': './src/generators/test-generator.js',
     'wait-strategy': './src/utils/wait-strategy.js',
     'browser-api': './src/utils/browser-api.js'
   },
@@ -88,14 +87,6 @@ module.exports = {
           from: 'src/network',
           to: '.'
         },
-        {
-          from: 'src/integrations',
-          to: '.'
-        },
-        {
-          from: 'src/pom',
-          to: '.'
-        }
       ]
     })
   ],

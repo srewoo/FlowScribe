@@ -68,7 +68,7 @@ class RecordingIndicator {
         border-radius: 9999px;
         box-shadow: 0 10px 25px -5px rgba(239, 68, 68, 0.3),
                     0 8px 10px -6px rgba(239, 68, 68, 0.2);
-        cursor: move;
+        cursor: pointer;
         user-select: none;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         backdrop-filter: blur(10px);
@@ -354,13 +354,14 @@ class RecordingIndicator {
   }
 
   /**
-   * Handle click on indicator
+   * Handle click on indicator — opens the extension popup
    */
   handleClick() {
-    // Open popup or show quick actions
-    console.log('FlowScribe indicator clicked');
-    // You can add custom behavior here, like opening the extension popup
-    // or showing a quick action menu
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_POPUP' });
+    } catch (e) {
+      console.warn('FlowScribe: Could not open popup', e);
+    }
   }
 
   /**

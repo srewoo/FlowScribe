@@ -49,6 +49,9 @@ class RecordingIndicator {
     // Add event listeners
     this.setupEventListeners();
 
+    // Allow page interactions through the indicator by default
+    this.enablePassthrough();
+
     // Add to page (check if body exists to avoid null error on chrome://newtab)
     const appendTarget = document.body || document.documentElement;
     if (appendTarget) {
@@ -371,13 +374,33 @@ class RecordingIndicator {
   }
 
   /**
+   * Allow clicks/typing to pass through to the page beneath the indicator.
+   * The indicator only becomes interactive when the mouse is directly over it.
+   */
+  enablePassthrough() {
+    this.indicator.style.pointerEvents = 'none';
+
+    this._hoverDetector = (e) => {
+      if (!this.indicator || this.isDragging) return;
+      const rect = this.indicator.getBoundingClientRect();
+      const isOver = e.clientX >= rect.left && e.clientX <= rect.right &&
+                     e.clientY >= rect.top && e.clientY <= rect.bottom;
+      this.indicator.style.pointerEvents = isOver ? 'auto' : 'none';
+    };
+    document.addEventListener('mousemove', this._hoverDetector);
+  }
+
+  /**
    * Handle click on indicator
    */
   handleClick() {
-    // Open popup or show quick actions
-    Logger.log('FlowScribe indicator clicked');
-    // You can add custom behavior here, like opening the extension popup
-    // or showing a quick action menu
+    Logger.log('FlowScribe indicator clicked — restoring panel');
+    const panel = getOrCreatePanel();
+    if (panel.container) {
+      panel.show();
+    } else {
+      panel.create();
+    }
   }
 
   /**
@@ -415,6 +438,10 @@ class RecordingIndicator {
    * Remove the indicator
    */
   remove() {
+    if (this._hoverDetector) {
+      document.removeEventListener('mousemove', this._hoverDetector);
+      this._hoverDetector = null;
+    }
     if (this.indicator) {
       this.indicator.classList.remove('flowscribe-visible');
       setTimeout(() => {
@@ -491,6 +518,412 @@ if (typeof window !== 'undefined') {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = RecordingIndicator;
 }
+/**
+ * Floating Panel - Persistent in-page UI
+ * Three modes: minimized (pill), normal (420px), maximized (800px)
+ */
+class FloatingPanel {
+  constructor() {
+    this.container = null;
+    this.pillBar = null;
+    this.iframe = null;
+    this.isDragging = false;
+    this.dragOffset = { x: 0, y: 0 };
+    this.isMaximized = false;
+    this.isMinimized = false;
+    this.defaultWidth = 420;
+    this.defaultHeight = 600;
+    this.maxWidth = 800;
+    this.maxHeight = '92vh';
+    this.position = this.loadPosition();
+    this.stylesInjected = false;
+
+    // SVG icon for FlowScribe (document/pen icon)
+    this.iconSvg = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>`;
+  }
+
+  create() {
+    if (this.container) {
+      this.showPanel();
+      return;
+    }
+
+    this.injectStyles();
+    this.createPanel();
+    this.createPillBar();
+    this.setupMessageListener();
+  }
+
+  createPanel() {
+    this.container = document.createElement('div');
+    this.container.id = 'flowscribe-panel';
+    this.container.className = 'fsp';
+    this.container.style.right = '16px';
+    this.container.style.top = this.position.y + 'px';
+    this.container.style.width = this.defaultWidth + 'px';
+    this.container.style.height = this.defaultHeight + 'px';
+
+    // Title bar
+    const titleBar = document.createElement('div');
+    titleBar.className = 'fsp-titlebar';
+    titleBar.innerHTML = `
+      <div class="fsp-title-left">
+        <span class="fsp-icon">${this.iconSvg}</span>
+        <span class="fsp-title">FlowScribe</span>
+      </div>
+      <div class="fsp-controls">
+        <button class="fsp-ctrl" id="fsp-min" title="Minimize">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="fsp-ctrl" id="fsp-max" title="Maximize">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
+        <button class="fsp-ctrl fsp-ctrl-close" id="fsp-close" title="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    `;
+
+    this.iframe = document.createElement('iframe');
+    this.iframe.src = chrome.runtime.getURL('popup.html');
+    this.iframe.className = 'fsp-iframe';
+    this.iframe.setAttribute('allow', 'clipboard-write');
+
+    this.container.appendChild(titleBar);
+    this.container.appendChild(this.iframe);
+
+    const target = document.body || document.documentElement;
+    if (target) target.appendChild(this.container);
+
+    this.setupDrag(titleBar);
+    this.container.querySelector('#fsp-min').addEventListener('click', () => this.minimize());
+    this.container.querySelector('#fsp-max').addEventListener('click', () => this.toggleMaximize());
+    this.container.querySelector('#fsp-close').addEventListener('click', () => this.close());
+
+    requestAnimationFrame(() => this.container.classList.add('fsp-visible'));
+  }
+
+  createPillBar() {
+    if (this.pillBar) return;
+
+    this.pillBar = document.createElement('div');
+    this.pillBar.id = 'flowscribe-pill';
+    this.pillBar.className = 'fsp-pill';
+    this.pillBar.innerHTML = `
+      <span class="fsp-pill-icon">${this.iconSvg}</span>
+      <span class="fsp-pill-text">FlowScribe</span>
+      <svg class="fsp-pill-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"/></svg>
+    `;
+    this.pillBar.style.display = 'none';
+    this.pillBar.addEventListener('click', () => this.showPanel());
+
+    const target = document.body || document.documentElement;
+    if (target) target.appendChild(this.pillBar);
+  }
+
+  injectStyles() {
+    if (this.stylesInjected) return;
+    this.stylesInjected = true;
+
+    const style = document.createElement('style');
+    style.id = 'flowscribe-panel-styles';
+    style.textContent = `
+      /* ===== PANEL ===== */
+      .fsp {
+        position: fixed;
+        z-index: 2147483647;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 25px 60px rgba(0,0,0,0.25), 0 0 0 1px rgba(99,102,241,0.12);
+        overflow: hidden;
+        opacity: 0;
+        transform: translateY(12px);
+        transition: opacity 0.25s ease, transform 0.25s ease, width 0.3s ease, height 0.3s ease;
+        display: flex;
+        flex-direction: column;
+        min-width: 340px;
+        min-height: 400px;
+      }
+      .fsp.fsp-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .fsp.fsp-dragging {
+        transition: opacity 0.25s ease;
+        cursor: grabbing;
+      }
+
+      /* ===== TITLE BAR ===== */
+      .fsp-titlebar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 14px;
+        background: #1e1b4b;
+        color: #fff;
+        cursor: move;
+        user-select: none;
+        flex-shrink: 0;
+        border-radius: 12px 12px 0 0;
+      }
+      .fsp-title-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .fsp-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.85;
+      }
+      .fsp-icon svg {
+        width: 16px;
+        height: 16px;
+        color: #a5b4fc;
+      }
+      .fsp-title {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        color: #e0e7ff;
+      }
+      .fsp-controls {
+        display: flex;
+        gap: 8px;
+      }
+      .fsp-ctrl {
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: #a5b4fc;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s ease, color 0.15s ease;
+        padding: 0;
+      }
+      .fsp-ctrl:hover {
+        background: rgba(165,180,252,0.15);
+        color: #fff;
+      }
+      .fsp-ctrl-close:hover {
+        background: rgba(239,68,68,0.8);
+        color: #fff;
+      }
+
+      /* ===== IFRAME ===== */
+      .fsp-iframe {
+        flex: 1;
+        width: 100%;
+        border: none;
+        background: #fff;
+      }
+
+      /* ===== MINIMIZED PILL BAR ===== */
+      .fsp-pill {
+        position: fixed;
+        z-index: 2147483647;
+        bottom: 24px;
+        right: 24px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 20px;
+        background: #1e1b4b;
+        color: #e0e7ff;
+        border-radius: 9999px;
+        box-shadow: 0 8px 30px rgba(30,27,75,0.35), 0 0 0 1px rgba(99,102,241,0.15);
+        cursor: pointer;
+        user-select: none;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+      .fsp-pill:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 40px rgba(30,27,75,0.45), 0 0 0 1px rgba(99,102,241,0.25);
+      }
+      .fsp-pill-icon {
+        display: flex;
+        align-items: center;
+      }
+      .fsp-pill-icon svg {
+        width: 18px;
+        height: 18px;
+        color: #a5b4fc;
+      }
+      .fsp-pill-text {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+      }
+      .fsp-pill-chevron {
+        opacity: 0.6;
+        margin-left: 2px;
+      }
+    `;
+
+    const head = document.head || document.documentElement;
+    if (head) head.appendChild(style);
+  }
+
+  setupDrag(titleBar) {
+    titleBar.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.fsp-ctrl')) return;
+      e.preventDefault();
+      this.isDragging = true;
+      this.container.classList.add('fsp-dragging');
+      const rect = this.container.getBoundingClientRect();
+      this.dragOffset = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      // Store the current right value so we can switch to left positioning
+      this.container.style.left = rect.left + 'px';
+      this.container.style.right = 'auto';
+      document.body.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!this.isDragging) return;
+      e.preventDefault();
+      let x = e.clientX - this.dragOffset.x;
+      let y = e.clientY - this.dragOffset.y;
+      x = Math.max(0, Math.min(x, window.innerWidth - 100));
+      y = Math.max(0, Math.min(y, window.innerHeight - 40));
+      this.container.style.left = x + 'px';
+      this.container.style.top = y + 'px';
+      this.position = { x, y };
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (!this.isDragging) return;
+      this.isDragging = false;
+      this.container.classList.remove('fsp-dragging');
+      document.body.style.cursor = '';
+      this.savePosition();
+    });
+  }
+
+  setupMessageListener() {
+    window.addEventListener('message', (event) => {
+      if (!event.data || !event.data.type) return;
+      if (!event.data.type.startsWith('flowscribe-')) return;
+      switch (event.data.type) {
+        case 'flowscribe-minimize': this.minimize(); break;
+        case 'flowscribe-maximize': this.toggleMaximize(); break;
+        case 'flowscribe-close': this.close(); break;
+      }
+    });
+  }
+
+  minimize() {
+    this.isMinimized = true;
+    if (this.container) {
+      this.container.style.display = 'none';
+    }
+    if (this.pillBar) {
+      this.pillBar.style.display = 'flex';
+    }
+  }
+
+  showPanel() {
+    this.isMinimized = false;
+    if (this.pillBar) {
+      this.pillBar.style.display = 'none';
+    }
+    if (this.container) {
+      this.container.style.display = 'flex';
+      this.container.classList.add('fsp-visible');
+    }
+  }
+
+  toggleMaximize() {
+    if (!this.container) return;
+    if (this.isMaximized) {
+      this.container.style.width = this.defaultWidth + 'px';
+      this.container.style.height = this.defaultHeight + 'px';
+      this.container.style.right = '16px';
+      this.container.style.left = 'auto';
+      this.container.style.top = this.position.y + 'px';
+    } else {
+      this.container.style.width = this.maxWidth + 'px';
+      this.container.style.height = this.maxHeight;
+      this.container.style.right = '16px';
+      this.container.style.left = 'auto';
+      this.container.style.top = '4vh';
+    }
+    this.isMaximized = !this.isMaximized;
+  }
+
+  show() {
+    if (this.isMinimized) {
+      this.showPanel();
+    } else if (this.container) {
+      this.container.style.display = 'flex';
+      this.container.classList.add('fsp-visible');
+    }
+  }
+
+  close() {
+    if (this.container) {
+      this.container.classList.remove('fsp-visible');
+      setTimeout(() => {
+        if (this.container && this.container.parentNode) {
+          this.container.parentNode.removeChild(this.container);
+        }
+        this.container = null;
+        this.iframe = null;
+        this.isMaximized = false;
+        this.isMinimized = false;
+      }, 250);
+    }
+    if (this.pillBar && this.pillBar.parentNode) {
+      this.pillBar.parentNode.removeChild(this.pillBar);
+      this.pillBar = null;
+    }
+  }
+
+  toggle() {
+    if (this.isMinimized) {
+      this.showPanel();
+    } else if (this.container) {
+      this.minimize();
+    } else {
+      this.create();
+    }
+  }
+
+  isVisible() {
+    return this.container && this.container.style.display !== 'none';
+  }
+
+  loadPosition() {
+    try {
+      const saved = localStorage.getItem('flowscribe-panel-position');
+      if (saved) return JSON.parse(saved);
+    } catch (e) { /* ignore */ }
+    return { x: window.innerWidth - 440, y: 20 };
+  }
+
+  savePosition() {
+    try {
+      localStorage.setItem('flowscribe-panel-position', JSON.stringify(this.position));
+    } catch (e) { /* ignore */ }
+  }
+}
+
+// Global floating panel instance
+let flowscribePanel = null;
+
+function getOrCreatePanel() {
+  if (!flowscribePanel) {
+    flowscribePanel = new FloatingPanel();
+  }
+  return flowscribePanel;
+}
+
 class FlowScribeRecorder {
   constructor() {
     this.isRecording = false;
@@ -570,6 +1003,11 @@ class FlowScribeRecorder {
           break;
         case 'STOP_ELEMENT_PICKER':
           this.stopElementPicker();
+          sendResponse({ success: true });
+          break;
+        case 'TOGGLE_PANEL':
+          const panel = getOrCreatePanel();
+          panel.toggle();
           sendResponse({ success: true });
           break;
       }

@@ -2,69 +2,125 @@ const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 
-const distPath = path.resolve(__dirname, '../dist');
-const outputPath = path.resolve(__dirname, '../package/flowscribe-extension.zip');
+// Check for --all flag to package all browsers
+const packageAll = process.argv.includes('--all');
 
-// Check if dist folder exists
-if (!fs.existsSync(distPath)) {
-  console.error('❌ Error: dist folder not found. Please run "npm run build" first.');
-  process.exit(1);
-}
+// Browser configurations
+const browsers = packageAll
+  ? ['chrome', 'firefox', 'edge']
+  : [process.env.BROWSER || 'chrome'];
 
-// Ensure the output directory exists
-const outputDir = path.dirname(outputPath);
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
+// Ensure package directory exists
+const packageDir = path.resolve(__dirname, '../package');
+if (!fs.existsSync(packageDir)) {
+  fs.mkdirSync(packageDir, { recursive: true });
   console.log('📁 Created package directory');
 }
 
-// Remove existing ZIP file if it exists
-if (fs.existsSync(outputPath)) {
-  fs.unlinkSync(outputPath);
-  console.log('🗑️  Removed existing ZIP file');
+/**
+ * Create a ZIP archive for a specific browser
+ */
+function createZip(browser) {
+  return new Promise((resolve, reject) => {
+    const distPath = path.resolve(__dirname, `../dist-${browser}`);
+    const outputPath = path.resolve(__dirname, `../package/flowscribe-${browser}.zip`);
+
+    // Check if dist folder exists
+    if (!fs.existsSync(distPath)) {
+      console.error(`❌ Error: dist-${browser} folder not found. Please run "npm run build:${browser}" first.`);
+      reject(new Error(`dist-${browser} not found`));
+      return;
+    }
+
+    // Remove existing ZIP file if it exists
+    if (fs.existsSync(outputPath)) {
+      fs.unlinkSync(outputPath);
+      console.log(`🗑️  Removed existing ${browser} ZIP file`);
+    }
+
+    // Create a new ZIP archive
+    const output = fs.createWriteStream(outputPath);
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Maximum compression
+    });
+
+    // Listen for archive events
+    output.on('close', function() {
+      const sizeInKB = (archive.pointer() / 1024).toFixed(2);
+      const sizeInMB = (archive.pointer() / 1024 / 1024).toFixed(2);
+      console.log(`✅ ${browser.toUpperCase()} extension package created!`);
+      console.log(`   📦 File: flowscribe-${browser}.zip`);
+      console.log(`   📏 Size: ${sizeInKB} KB (${sizeInMB} MB)`);
+      resolve();
+    });
+
+    archive.on('warning', function(err) {
+      if (err.code === 'ENOENT') {
+        console.warn('⚠️  Warning:', err);
+      } else {
+        reject(err);
+      }
+    });
+
+    archive.on('error', function(err) {
+      console.error(`❌ Archive error for ${browser}:`, err);
+      reject(err);
+    });
+
+    // Pipe archive data to the file
+    archive.pipe(output);
+
+    console.log(`\n📦 Creating ${browser.toUpperCase()} extension package...`);
+    console.log(`   📂 Source: dist-${browser}/`);
+    console.log(`   📁 Output: package/flowscribe-${browser}.zip`);
+
+    // Add all files from dist directory
+    archive.directory(distPath, false);
+
+    // Finalize the archive
+    archive.finalize();
+  });
 }
 
-// Create a new ZIP archive
-const output = fs.createWriteStream(outputPath);
-const archive = archiver('zip', {
-  zlib: { level: 9 } // Maximum compression
-});
+/**
+ * Main function to package all browsers
+ */
+async function main() {
+  console.log('🚀 FlowScribe Extension Packager');
+  console.log('================================\n');
 
-// Listen for archive events
-output.on('close', function() {
-  const sizeInMB = (archive.pointer() / 1024 / 1024).toFixed(2);
-  console.log('✅ Chrome extension package created successfully!');
-  console.log(`📦 File: flowscribe-extension.zip`);
-  console.log(`📏 Size: ${sizeInMB} MB (${archive.pointer()} bytes)`);
-  console.log('🚀 Ready for Chrome Web Store upload!');
-});
-
-output.on('end', function() {
-  console.log('📝 Data has been drained');
-});
-
-archive.on('warning', function(err) {
-  if (err.code === 'ENOENT') {
-    console.warn('⚠️  Warning:', err);
-  } else {
-    throw err;
+  if (packageAll) {
+    console.log('📋 Packaging for all browsers: Chrome, Firefox, Edge\n');
   }
-});
 
-archive.on('error', function(err) {
-  console.error('❌ Archive error:', err);
-  throw err;
-});
+  try {
+    for (const browser of browsers) {
+      await createZip(browser);
+    }
 
-// Pipe archive data to the file
-archive.pipe(output);
+    console.log('\n================================');
+    console.log('✅ All packages created successfully!');
+    console.log('================================\n');
 
-console.log('📦 Creating Chrome extension package...');
-console.log(`📂 Source: ${distPath}`);
-console.log(`📁 Output: ${outputPath}`);
+    console.log('📦 Package files ready in /package folder:');
+    browsers.forEach(browser => {
+      const zipPath = path.resolve(__dirname, `../package/flowscribe-${browser}.zip`);
+      if (fs.existsSync(zipPath)) {
+        const stats = fs.statSync(zipPath);
+        const sizeKB = (stats.size / 1024).toFixed(2);
+        console.log(`   • flowscribe-${browser}.zip (${sizeKB} KB)`);
+      }
+    });
 
-// Add all files from dist directory
-archive.directory(distPath, false);
+    console.log('\n🚀 Ready for store uploads:');
+    console.log('   • Chrome Web Store: flowscribe-chrome.zip');
+    console.log('   • Firefox Add-ons: flowscribe-firefox.zip');
+    console.log('   • Edge Add-ons: flowscribe-edge.zip');
 
-// Finalize the archive
-archive.finalize();
+  } catch (error) {
+    console.error('\n❌ Packaging failed:', error.message);
+    process.exit(1);
+  }
+}
+
+main();

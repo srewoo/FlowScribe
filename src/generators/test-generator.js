@@ -157,10 +157,9 @@ const fs = require('fs');
 
     switch (action.type) {
       case 'click':
-        // Modern: use locator().click() with auto-waiting
         code += `${indent}await ${locatorCode}.click();\n`;
-        if (includeAssertions && action.assertions?.some(a => a.type === 'url_change')) {
-          code += `${indent}await expect(page).toHaveURL(/.*/); // Wait for navigation\n`;
+        if (action.stateChange?.urlChanged || action.assertions?.some(a => a.type === 'url_change')) {
+          code += `${indent}await page.waitForURL('**', { waitUntil: 'networkidle' });\n`;
         }
         break;
 
@@ -172,15 +171,21 @@ const fs = require('fs');
         code += `${indent}await ${locatorCode}.click({ button: 'right' });\n`;
         break;
 
-      case 'input':
-        const value = this.sanitizeString(action.value);
-        // Modern: use fill() with locator
-        code += `${indent}await ${locatorCode}.fill('${value}');\n`;
-        // Add assertion for non-password fields
-        if (includeAssertions && action.target.type !== 'password') {
-          code += `${indent}await expect(${locatorCode}).toHaveValue('${value}');\n`;
+      case 'input': {
+        const isSensitive = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
+        const rawValue = this.sanitizeString(action.value);
+        if (isSensitive) {
+          code += `${indent}// TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `${indent}await ${locatorCode}.fill(process.env.TEST_PASSWORD || '');\n`;
+        } else {
+          code += `${indent}await ${locatorCode}.fill('${rawValue}');\n`;
+          if (includeAssertions) {
+            code += `${indent}await expect(${locatorCode}).toHaveValue('${rawValue}');\n`;
+          }
         }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
@@ -242,24 +247,25 @@ const fs = require('fs');
         code += `${indent}await page.goBack();\n`;
         break;
 
-      case 'submit':
+      case 'submit': {
+        const isForm = action.target?.tagName?.toLowerCase() === 'form';
         code += `${indent}// Form submission\n`;
-        code += `${indent}await ${locatorCode}.evaluate(form => form.submit());\n`;
+        if (isForm) {
+          code += `${indent}await ${locatorCode}.evaluate(form => form.submit());\n`;
+        } else {
+          code += `${indent}await ${locatorCode}.click();\n`;
+        }
         code += `${indent}await page.waitForLoadState('networkidle');\n`;
         if (includeAssertions) {
-          code += `${indent}await expect(page).toHaveURL(/.*/); // Wait for post-submit navigation\n`;
+          code += `${indent}await expect(page).toHaveURL(/.*/); // Verify post-submit navigation\n`;
         }
         break;
+      }
     }
 
     // Add assertions
     if (includeAssertions && action.assertions) {
       code += this.generateAssertions(action.assertions);
-    }
-
-    // Add wait if needed
-    if (action.timeSinceLastAction > 1000) {
-      code += `${indent}await page.waitForTimeout(${Math.min(action.timeSinceLastAction, 3000)}); // User think time\n`;
     }
 
     code += '\n';
@@ -573,11 +579,19 @@ public class FlowScribeTest {
         code += `${indent}findElement("${this.generateSelector(action.target)}").click();\n`;
         break;
 
-      case 'input':
+      case 'input': {
+        const isSensitiveJava = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
         code += `${indent}WebElement inputElement = findElement("${this.generateSelector(action.target)}");\n`;
         code += `${indent}inputElement.clear();\n`;
-        code += `${indent}inputElement.sendKeys("${this.sanitizeString(action.value)}");\n`;
+        if (isSensitiveJava) {
+          code += `${indent}// TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `${indent}inputElement.sendKeys(System.getenv("TEST_PASSWORD"));\n`;
+        } else {
+          code += `${indent}inputElement.sendKeys("${this.sanitizeString(action.value)}");\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
@@ -705,11 +719,20 @@ if __name__ == "__main__":
         code += `${indent}self.find_element("${this.generateSelector(action.target)}").click()\n`;
         break;
 
-      case 'input':
+      case 'input': {
+        const isSensitivePy = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
         code += `${indent}input_element = self.find_element("${this.generateSelector(action.target)}")\n`;
         code += `${indent}input_element.clear()\n`;
-        code += `${indent}input_element.send_keys("${this.sanitizeString(action.value)}")\n`;
+        if (isSensitivePy) {
+          code += `${indent}# TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `${indent}import os\n`;
+          code += `${indent}input_element.send_keys(os.environ.get("TEST_PASSWORD", ""))\n`;
+        } else {
+          code += `${indent}input_element.send_keys("${this.sanitizeString(action.value)}")\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
@@ -746,13 +769,6 @@ if __name__ == "__main__":
     // Add assertions
     if (options.includeAssertions && action.assertions) {
       code += this.generatePythonAssertions(action.assertions);
-    }
-
-    // Add explicit wait if there's significant delay (instead of time.sleep)
-    if (action.timeSinceLastAction > 1000) {
-      const waitSeconds = Math.min(action.timeSinceLastAction / 1000, 3);
-      code += `${indent}# Wait ${waitSeconds}s for page to stabilize\n`;
-      code += `${indent}self.wait.until(lambda d: d.execute_script("return document.readyState") === "complete")\n`;
     }
 
     return code;
@@ -1016,9 +1032,17 @@ describe('FlowScribe Generated Test', () => {
         code += `    cy.get('${this.generateSelector(action.target)}').rightclick();\n`;
         break;
 
-      case 'input':
-        code += `    cy.get('${this.generateSelector(action.target)}').clear().type('${this.sanitizeString(action.value)}');\n`;
+      case 'input': {
+        const isSensitiveCy = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
+        if (isSensitiveCy) {
+          code += `    // TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `    cy.get('${this.generateSelector(action.target)}').clear().type(Cypress.env('TEST_PASSWORD') || '');\n`;
+        } else {
+          code += `    cy.get('${this.generateSelector(action.target)}').clear().type('${this.sanitizeString(action.value)}');\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
@@ -1065,11 +1089,6 @@ describe('FlowScribe Generated Test', () => {
     // Add assertions
     if (includeAssertions && action.assertions) {
       code += this.generateCypressAssertions(action.assertions);
-    }
-
-    // Add wait
-    if (action.timeSinceLastAction > 2000) {
-      code += `    cy.wait(${Math.min(action.timeSinceLastAction, 3000)});\n`;
     }
 
     return code;
@@ -1185,9 +1204,17 @@ const assert = require('assert');
         }
         break;
 
-      case 'input':
-        code += `    await page.type('${this.generateSelector(action.target)}', '${this.sanitizeString(action.value)}');\n`;
+      case 'input': {
+        const isSensitivePup = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
+        if (isSensitivePup) {
+          code += `    // TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `    await page.type('${this.generateSelector(action.target)}', process.env.TEST_PASSWORD || '');\n`;
+        } else {
+          code += `    await page.type('${this.generateSelector(action.target)}', '${this.sanitizeString(action.value)}');\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
@@ -1218,11 +1245,6 @@ const assert = require('assert');
     // Add assertions
     if (includeAssertions && action.assertions) {
       code += this.generatePuppeteerAssertions(action.assertions);
-    }
-
-    // Add wait
-    if (action.timeSinceLastAction > 1000) {
-      code += `    await page.waitForTimeout(${Math.min(action.timeSinceLastAction, 3000)});\n`;
     }
 
     return code;

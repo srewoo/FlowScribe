@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -25,7 +26,7 @@
             background: white;
             border-radius: 16px;
             padding: 40px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
 
         .header {
@@ -175,7 +176,7 @@
 
         .feature-card:hover {
             transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
         }
 
         .feature-icon {
@@ -250,7 +251,7 @@
             cursor: pointer;
             font-size: 14px;
             font-weight: 600;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
             transition: transform 0.2s;
         }
 
@@ -330,7 +331,8 @@
             font-size: 14px;
         }
 
-        th, td {
+        th,
+        td {
             padding: 12px 15px;
             text-align: left;
             border-bottom: 1px solid #e9ecef;
@@ -358,12 +360,28 @@
             font-weight: 600;
         }
 
-        .badge-playwright { background: #2EAD33; color: white; }
-        .badge-selenium { background: #43B02A; color: white; }
-        .badge-cypress { background: #17202C; color: white; }
-        .badge-puppeteer { background: #40B5A4; color: white; }
+        .badge-playwright {
+            background: #2EAD33;
+            color: white;
+        }
 
-        ul, ol {
+        .badge-selenium {
+            background: #43B02A;
+            color: white;
+        }
+
+        .badge-cypress {
+            background: #17202C;
+            color: white;
+        }
+
+        .badge-puppeteer {
+            background: #40B5A4;
+            color: white;
+        }
+
+        ul,
+        ol {
             padding-left: 25px;
         }
 
@@ -410,6 +428,7 @@
         }
     </style>
 </head>
+
 <body>
     <button class="back-btn" onclick="window.close()">Close Help</button>
 
@@ -443,7 +462,8 @@
         <div class="section" id="getting-started">
             <h2>Getting Started</h2>
 
-            <p>FlowScribe transforms your browser interactions into production-ready test scripts. Follow these simple steps to create your first test:</p>
+            <p>FlowScribe transforms your browser interactions into production-ready test scripts. Follow these simple
+                steps to create your first test:</p>
 
             <div class="step">
                 <span class="step-number">1</span>
@@ -513,7 +533,8 @@
                 <div class="feature-card">
                     <div class="feature-icon">🖱️</div>
                     <div class="feature-title">Click Actions</div>
-                    <div class="feature-desc">Buttons, links, checkboxes, radio buttons, and any clickable elements</div>
+                    <div class="feature-desc">Buttons, links, checkboxes, radio buttons, and any clickable elements
+                    </div>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">⌨️</div>
@@ -584,7 +605,8 @@
         <div class="section" id="assertions">
             <h2>Adding Assertions</h2>
 
-            <p>Assertions validate that your application behaves correctly. FlowScribe provides a visual Assertion Builder to add checks to your tests.</p>
+            <p>Assertions validate that your application behaves correctly. FlowScribe provides a visual Assertion
+                Builder to add checks to your tests.</p>
 
             <div class="tab-section">
                 <div class="tab-header">
@@ -620,7 +642,8 @@
                 <span class="step-number">4</span>
                 <div class="step-content">
                     <strong>Configure Assertion</strong>
-                    <p>Reopen FlowScribe popup - the element data is automatically loaded. Choose your assertion type and value.</p>
+                    <p>Reopen FlowScribe popup - the element data is automatically loaded. Choose your assertion type
+                        and value.</p>
                 </div>
             </div>
 
@@ -693,7 +716,8 @@
                 </tr>
                 <tr>
                     <td><strong>Assertion Type Buttons</strong></td>
-                    <td>Select what to verify: Visible, Hidden, Has Text, Has Value, Enabled, Disabled, Attribute, or Count.</td>
+                    <td>Select what to verify: Visible, Hidden, Has Text, Has Value, Enabled, Disabled, Attribute, or
+                        Count.</td>
                 </tr>
                 <tr>
                     <td><strong>+ Add Assertion</strong></td>
@@ -718,7 +742,8 @@
                 <span class="info-icon">💡</span>
                 <div class="info-content">
                     <strong>Quick Assertion</strong>
-                    While recording, click the "Add Assertion" button to quickly add assertions without stopping your recording.
+                    While recording, click the "Add Assertion" button to quickly add assertions without stopping your
+                    recording.
                 </div>
             </div>
         </div>
@@ -813,14 +838,15 @@
         <div class="section" id="ai-features">
             <h2>AI Features</h2>
 
-            <p>FlowScribe integrates with leading AI providers to enhance your test scripts with intelligent improvements.</p>
+            <p>FlowScribe integrates with leading AI providers to enhance your test scripts with intelligent
+                improvements.</p>
 
             <h3>Supported AI Providers</h3>
             <div class="feature-grid">
                 <div class="feature-card">
                     <div class="feature-icon">🤖</div>
                     <div class="feature-title">OpenAI</div>
-                    <div class="feature-desc">GPT-4o, GPT-4o-mini models for powerful script enhancement</div>
+                    <div class="feature-desc">GPT-4.1, GPT-4.1-mini models for powerful script enhancement</div>
                 </div>
                 <div class="feature-card">
                     <div class="feature-icon">🧠</div>
@@ -877,7 +903,8 @@
                 <span class="info-icon">🔒</span>
                 <div class="info-content">
                     <strong>API Key Security</strong>
-                    Your API keys are encrypted using AES-GCM encryption and stored locally in your browser. They are never transmitted to our servers.
+                    Your API keys are encrypted using AES-GCM encryption and stored locally in your browser. They are
+                    never transmitted to our servers.
                 </div>
             </div>
         </div>
@@ -978,7 +1005,8 @@
 
             <h3>For Better Recordings</h3>
             <ul>
-                <li><strong>Use data-testid attributes</strong> - Add <code>data-testid="login-button"</code> to key elements for the most stable selectors</li>
+                <li><strong>Use data-testid attributes</strong> - Add <code>data-testid="login-button"</code> to key
+                    elements for the most stable selectors</li>
                 <li><strong>Record at normal speed</strong> - Don't rush; let pages fully load between actions</li>
                 <li><strong>Use pause/resume</strong> - Organize complex workflows into logical sections</li>
                 <li><strong>Test multiple scenarios</strong> - Record both happy path and error cases</li>
@@ -998,7 +1026,8 @@
                 <div class="info-content">
                     <strong>Selector Priority</strong>
                     <p>FlowScribe prioritizes selectors in this order for maximum stability:</p>
-                    <code>data-testid</code> > <code>id</code> > <code>aria-label</code> > <code>name</code> > <code>text</code> > <code>css</code>
+                    <code>data-testid</code> > <code>id</code> > <code>aria-label</code> > <code>name</code> >
+                    <code>text</code> > <code>css</code>
                 </div>
             </div>
         </div>
@@ -1080,9 +1109,11 @@
 
             <h3>Get Help</h3>
             <ul>
-                <li><strong>GitHub Issues:</strong> <a href="https://github.com/srewoo/FlowScribe/issues" target="_blank">Report bugs or request features</a></li>
+                <li><strong>GitHub Issues:</strong> <a href="https://github.com/srewoo/FlowScribe/issues"
+                        target="_blank">Report bugs or request features</a></li>
                 <li><strong>Email Support:</strong> <a href="mailto:srewoo@gmail.com">srewoo@gmail.com</a></li>
-                <li><strong>Repository:</strong> <a href="https://github.com/srewoo/FlowScribe" target="_blank">github.com/srewoo/FlowScribe</a></li>
+                <li><strong>Repository:</strong> <a href="https://github.com/srewoo/FlowScribe"
+                        target="_blank">github.com/srewoo/FlowScribe</a></li>
             </ul>
 
             <h3>Contributing</h3>
@@ -1097,7 +1128,8 @@
                 <span class="info-icon">🔒</span>
                 <div class="info-content">
                     <strong>Privacy First</strong>
-                    FlowScribe is designed with privacy in mind. All recordings are processed locally in your browser. Your data never leaves your machine unless you explicitly use AI services with your own API keys.
+                    FlowScribe is designed with privacy in mind. All recordings are processed locally in your browser.
+                    Your data never leaves your machine unless you explicitly use AI services with your own API keys.
                 </div>
             </div>
 
@@ -1121,10 +1153,12 @@
             </table>
         </div>
 
-        <div style="text-align: center; padding-top: 30px; border-top: 2px solid #f0f0f0; margin-top: 40px; color: #7f8c8d;">
+        <div
+            style="text-align: center; padding-top: 30px; border-top: 2px solid #f0f0f0; margin-top: 40px; color: #7f8c8d;">
             <p>Made with ❤️ by the FlowScribe Team</p>
             <p style="font-size: 12px;">© 2024 FlowScribe. MIT License.</p>
         </div>
     </div>
 </body>
+
 </html>

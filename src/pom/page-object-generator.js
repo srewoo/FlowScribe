@@ -86,7 +86,7 @@ class PageObjectGenerator {
     const pageMap = new Map();
 
     actions.forEach(action => {
-      const pageUrl = this.normalizeUrl(action.url || window.location.href);
+      const pageUrl = this.normalizeUrl(action.url || 'https://unknown');
       
       if (!pageMap.has(pageUrl)) {
         pageMap.set(pageUrl, {

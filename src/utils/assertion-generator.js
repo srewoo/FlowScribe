@@ -11,7 +11,13 @@ class AssertionGenerator {
   }
 
   /**
-   * Generate assertions based on action type and element state
+   * Generate assertions based on action type and element state.
+   * Dispatches to type-specific assertion generators and prepends a visibility
+   * assertion for the element, plus a page load assertion when applicable.
+   * @param {{ type: string, value?: string, files?: Array, source?: object, sourcePosition?: object, targetPosition?: object, element?: Element }} action - The recorded user action
+   * @param {Element | null} element - The DOM element that was interacted with
+   * @param {{ url?: string, title?: string, targetElement?: Element }} context - Page and interaction context
+   * @returns {Array<{ type: string, selector?: string, message: string, timeout?: number, expected?: string, optional?: boolean }>} Array of assertion objects describing expected conditions
    */
   generateAssertion(action, element, context) {
     const assertions = [];
@@ -57,6 +63,14 @@ class AssertionGenerator {
     return assertions;
   }
 
+  /**
+   * Generate assertions specific to click interactions, including checks for
+   * element enabled state, navigation triggers, modal/popup appearance,
+   * toggle state changes, and loading indicator completion.
+   * @param {Element} element - The DOM element that was clicked
+   * @param {object} context - Page and interaction context
+   * @returns {Array<{ type: string, selector?: string, message: string, waitForNavigation?: boolean, attribute?: string, timeout?: number }>} Array of click-specific assertion objects
+   */
   generateClickAssertions(element, context) {
     const assertions = [];
 
@@ -108,6 +122,15 @@ class AssertionGenerator {
     return assertions;
   }
 
+  /**
+   * Generate assertions specific to input/change interactions, including
+   * value verification, validation state checks, autocomplete suggestions,
+   * and real-time validation feedback visibility.
+   * @param {Element} element - The input DOM element that received a value
+   * @param {string} value - The value that was entered into the input
+   * @param {object} context - Page and interaction context
+   * @returns {Array<{ type: string, selector?: string, message: string, expected?: string, valid?: boolean, timeout?: number, optional?: boolean, state?: string }>} Array of input-specific assertion objects
+   */
   generateInputAssertions(element, value, context) {
     const assertions = [];
 
@@ -366,6 +389,14 @@ class AssertionGenerator {
   }
 
   // Helper methods
+
+  /**
+   * Generate an optimal CSS selector for a DOM element using a priority-based
+   * strategy: id, data-testid, aria-label, CSS path, then XPath fallback.
+   * Returns the first unique selector found, or a full CSS path as a last resort.
+   * @param {Element} element - The DOM element to generate a selector for
+   * @returns {string} A CSS selector string (or XPath) that identifies the element
+   */
   getSelector(element) {
     // Generate optimal selector using multiple strategies
     const strategies = [

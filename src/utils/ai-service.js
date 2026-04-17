@@ -3,36 +3,36 @@ class AIService {
     this.providers = {
       openai: {
         name: 'OpenAI',
-        models: ['gpt-4o-mini', 'gpt-4o', 'gpt-3.5-turbo'],
+        models: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano'],
         endpoint: 'https://api.openai.com/v1/chat/completions',
-        defaultModel: 'gpt-4o-mini'
+        defaultModel: 'gpt-4.1-mini'
       },
       anthropic: {
         name: 'Anthropic',
-        models: ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
+        models: ['claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
         endpoint: 'https://api.anthropic.com/v1/messages',
-        defaultModel: 'claude-3-5-sonnet-20241022'
+        defaultModel: 'claude-sonnet-4-5-20250514'
       },
       google: {
         name: 'Google AI',
-        models: ['gemini-1.5-flash', 'gemini-1.5-pro'],
+        models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
         endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/',
-        defaultModel: 'gemini-1.5-flash'
+        defaultModel: 'gemini-2.5-flash'
       }
     };
-    
+
     this.settings = {
       provider: 'openai',
-      model: 'gpt-4o',
+      model: 'gpt-4.1-mini',
       apiKey: '',
       enableAI: false,
-      maxTokens: 2000,
+      maxTokens: 8000,
       temperature: 0.1
     };
-    
+
     // Only auto-load settings if not skipped (for service worker compatibility)
     if (!skipAutoLoad) {
-    this.loadSettings();
+      this.loadSettings();
     }
   }
 
@@ -43,23 +43,23 @@ class AIService {
         console.warn('Chrome storage API not available in current context');
         throw new Error('Chrome storage API not available');
       }
-      
+
       // Load from the main settings storage to maintain consistency
       const result = await chrome.storage.local.get(['flowScribeSettings']);
       const mainSettings = result.flowScribeSettings || {};
-      
+
       this.settings = {
         provider: mainSettings.aiProvider || 'openai',
-        model: mainSettings.aiModel || 'gpt-4o',
+        model: mainSettings.aiModel || 'gpt-4.1-mini',
         apiKey: mainSettings.apiKey || '',
         enableAI: mainSettings.enableAI || false,
-        maxTokens: 2000,
+        maxTokens: 8096,
         temperature: 0.1
       };
-      
+
       // Validate model for the selected provider
       this.validateModelForProvider();
-      
+
       console.log('🤖 AI settings loaded successfully:', {
         provider: this.settings.provider,
         model: this.settings.model,
@@ -71,10 +71,10 @@ class AIService {
       // Use default settings if storage is unavailable
       this.settings = {
         provider: 'openai',
-        model: 'gpt-4o',
+        model: 'gpt-4.1-mini',
         apiKey: '',
         enableAI: false,
-        maxTokens: 2000,
+        maxTokens: 8000,
         temperature: 0.1
       };
     }
@@ -109,6 +109,45 @@ class AIService {
     return this.settings.enableAI && this.settings.apiKey && this.settings.provider;
   }
 
+  /**
+   * Strip markdown fences and extract the largest code block from an AI response.
+   * @param {string} response - Raw AI response that may contain markdown fences
+   * @returns {string} Cleaned code string with fences removed
+   */
+  validateAIOutput(code, framework) {
+    if (!code || typeof code !== 'string') return false;
+    if (code.length < 100) return false;
+    const signatures = {
+      playwright: [/test\(|it\(|describe\(/],
+      cypress:    [/describe\(|it\(|cy\./],
+      selenium:   [/def test_|@Test|testRecordedFlow/],
+      puppeteer:  [/puppeteer|browser\.|page\./]
+    };
+    const checks = signatures[framework] || [/.+/];
+    return checks.some(re => re.test(code));
+  }
+
+  cleanAIResponse(response) {
+    if (!response || typeof response !== 'string') return response;
+    let cleaned = response.trim();
+    const fenceMatch = cleaned.match(/^```[\w]*\n?([\s\S]*?)```$/);
+    if (fenceMatch) {
+      cleaned = fenceMatch[1].trim();
+    }
+    if (cleaned.includes('```')) {
+      const blocks = cleaned.match(/```[\w]*\n?([\s\S]*?)```/g);
+      if (blocks && blocks.length > 0) {
+        let largest = '';
+        for (const block of blocks) {
+          const code = block.replace(/^```[\w]*\n?/, '').replace(/```$/, '').trim();
+          if (code.length > largest.length) largest = code;
+        }
+        if (largest.length > 0) cleaned = largest;
+      }
+    }
+    return cleaned;
+  }
+
   async enhanceScript(actions, framework, options = {}) {
     console.log('🤖 LLM ENHANCEMENT STARTED:', {
       provider: this.settings.provider,
@@ -121,120 +160,74 @@ class AIService {
 
     if (!this.isConfigured()) {
       console.log('❌ AI not configured, using template mode');
-      return this.generateTemplateScript(actions, framework);
+      return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'not_configured' };
     }
 
     try {
       const prompt = this.buildEnhancementPrompt(actions, framework, options);
       console.log('📝 Sending prompt to LLM with action data...');
       const response = await this.callAIProvider(prompt);
-      
+
       if (response && response.enhancedScript) {
-        console.log('✅ LLM ENHANCEMENT COMPLETED successfully');
-        console.log('🎯 LLM Enhanced Script Length:', response.enhancedScript?.length || 0, 'characters');
-        return response.enhancedScript;
+        const cleaned = this.cleanAIResponse(response.enhancedScript);
+        if (this.validateAIOutput(cleaned, framework)) {
+          return cleaned;
+        }
+        console.warn('❌ AI output failed validation, falling back to template');
+        return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'validation_failed' };
       } else {
         console.warn('❌ AI response invalid, falling back to template');
-        return this.generateTemplateScript(actions, framework);
+        return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'empty_response' };
       }
     } catch (error) {
       console.error('❌ LLM ENHANCEMENT FAILED:', error);
-      return this.generateTemplateScript(actions, framework);
+      return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'api_error' };
     }
   }
 
   buildEnhancementPrompt(actions, framework, options) {
-    // Use the new enhanced prompt generator if available
-    try {
-      if (typeof require !== 'undefined') {
-        const EnhancedLocatorPromptGenerator = require('../ai/prompt-templates/enhanced-locator-prompt.js');
-        const promptGenerator = new EnhancedLocatorPromptGenerator();
-        return promptGenerator.generateEnhancedPrompt(actions, framework, options);
-      }
-    } catch (error) {
-      console.warn('Enhanced prompt generator not available, using fallback:', error);
-    }
-
-    // Fallback to enhanced version of original prompt
+    // Build enhancement prompt with element context
     const baseScript = this.generateTemplateScript(actions, framework);
     const pageAnalysis = this.analyzeActionsForContext(actions);
     const elementDetails = this.extractElementDetails(actions);
-    
+
     return {
-      systemPrompt: `You are an expert test automation architect specializing in ${framework} with advanced expertise in:
+      systemPrompt: `You are an expert ${framework} test automation engineer. Generate production-ready test scripts.
 
-🎯 INTELLIGENT LOCATOR GENERATION:
-- Analyze ACTUAL DOM structure from provided element data
-- Create multiple fallback strategies for each element
-- Prioritize: data-testid > unique ID > aria-label > name > stable attributes > text content
-- Avoid brittle selectors (nth-child, dynamic classes, absolute positions)
-- Generate robust XPath and CSS selectors with multiple fallback options
-- Use relative positioning from stable parent elements
+APPROACH:
+- Infer the user's high-level intent from the recorded actions. Test the workflow outcome, not just replay clicks.
+- Structure: setup → navigation → interaction → validation → cleanup.
 
-🛡️ COMPREHENSIVE ASSERTION STRATEGY:
-- Validate element presence before interaction
-- Verify text content, attributes, and form states
-- Assert URL patterns and navigation success
-- Check loading states and dynamic content
-- Validate form submissions and error states
-- Include accessibility and performance checks
-- Test both positive and negative scenarios
+RULES:
+- Output ONLY valid ${framework} code. No markdown fences, no explanations.
+- Convert EVERY recorded action into test code.
+- Locator priority: data-testid > ID > aria-label > name > role+text > placeholder > CSS.
+- Avoid brittle selectors: no nth-child, no dynamic/generated classes, no absolute XPath.
+- Add assertions: visibility before interaction, value after fill, URL after navigation, success indicator after submit.
+- Use framework auto-waiting. Never use hardcoded sleep/waitForTimeout/time.sleep.
+- Handle dynamic UI: wait for SPA route changes, async content, and animations before asserting.
+- Mask sensitive data: passwords → "{{PASSWORD}}", API keys → "{{API_KEY}}".
+- Include test.describe wrapper, setup, and teardown.`,
 
-🔄 COMPLETE JOURNEY COVERAGE:
-- Ensure EVERY recorded action is represented
-- Add intelligent waits for dynamic content
-- Handle page transitions and form submissions
-- Include error handling and retry mechanisms
-- Verify complete user workflow end-to-end
-- Add meaningful test descriptions and comments
+      userPrompt: `Generate a complete ${framework} test from this data.
 
-Return only valid, executable ${framework} code with detailed comments explaining locator choices.`,
-      
-      userPrompt: `ENHANCE this ${framework} test script using ACTUAL ELEMENT DATA and COMPREHENSIVE TESTING:
+Test Name: "${options.testName || 'FlowScribe User Journey'}"
+Total actions: ${actions.length}
+Pages: ${[...new Set(actions.map(a => a.url))].length} unique
 
-==== CURRENT BASIC SCRIPT ====
-${baseScript}
-
-==== RECORDED USER JOURNEY ====
+USER JOURNEY:
 ${this.formatUserJourney(actions)}
 
-==== ACTUAL ELEMENT DATA ====
+ELEMENT DATA:
 ${elementDetails}
 
-==== PAGE ANALYSIS ====
+PAGE ANALYSIS:
 ${pageAnalysis}
 
-==== ENHANCEMENT REQUIREMENTS ====
+BASE SCRIPT (enhance this):
+${baseScript}
 
-🎯 INTELLIGENT LOCATORS:
-- Use the provided element data above to create the best possible selectors
-- Generate multiple fallback strategies for each element
-- Prioritize stability: data-testid > unique ID > aria-label > name > stable attributes
-- Explain your locator choices in comments
-- NEVER assume element properties - use only the data provided above
-
-🛡️ COMPREHENSIVE ASSERTIONS:
-- Add element presence validation before each interaction
-- Verify text content where applicable
-- Check URL patterns for navigation: ${this.extractURLPatterns(actions)}
-- Validate form states and submission results
-- Assert loading states and dynamic content
-- Include error handling for network failures
-
-🔄 COMPLETE COVERAGE:
-- Represent ALL ${actions.length} recorded actions
-- Add appropriate waits for dynamic content
-- Handle page transitions: ${[...new Set(actions.map(a => a.url))].length} unique pages
-- Include retry logic and error recovery
-- Test Name: "${options.testName || 'FlowScribe Complete User Journey'}"
-
-CONFIGURATION:
-- Include Screenshots: ${options.includeScreenshots !== false}
-- Network Validation: ${options.includeNetworkAssertions || false}
-- Accessibility Checks: ${options.includeA11yChecks || false}
-- Self-Healing: ${options.applySelfHealing || false}
-
-Generate a complete, production-ready ${framework} test that uses the BEST possible locators from the element data provided and includes comprehensive assertions for the entire user journey.`
+URL patterns: ${this.extractURLPatterns(actions)}`
     };
   }
 
@@ -245,17 +238,17 @@ Generate a complete, production-ready ${framework} test that uses the BEST possi
     const pages = [...new Set(actions.map(a => a.url))];
     const elements = actions.filter(a => a.element).map(a => a.element);
     const interactions = actions.map(a => a.type);
-    
-    const hasTestIds = elements.some(e => 
-      e.attributes && Object.keys(e.attributes).some(attr => 
+
+    const hasTestIds = elements.some(e =>
+      e.attributes && Object.keys(e.attributes).some(attr =>
         attr.includes('test') || attr.includes('qa') || attr.includes('cy')));
-    
-    const hasAriaLabels = elements.some(e => 
+
+    const hasAriaLabels = elements.some(e =>
       e.attributes && e.attributes['aria-label']);
-    
-    const formElements = elements.filter(e => 
+
+    const formElements = elements.filter(e =>
       ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.tagName));
-    
+
     return `
 Pages visited: ${pages.length} (${pages.map(p => new URL(p).pathname).join(', ')})
 Total interactions: ${actions.length}
@@ -273,10 +266,10 @@ Interaction types: ${[...new Set(interactions)].join(', ')}
   extractElementDetails(actions) {
     return actions.map((action, index) => {
       if (!action.element) return null;
-      
+
       const el = action.element;
       const locatorOptions = this.generateLocatorOptions(el);
-      
+
       return `
 ACTION ${index + 1} (${action.type}):
   Element: ${el.tagName}${el.type ? `[type="${el.type}"]` : ''}
@@ -294,14 +287,17 @@ ACTION ${index + 1} (${action.type}):
   }
 
   /**
-   * Generate locator options for an element
+   * Generate a ranked array of possible locator strategies for an element,
+   * each with a type, CSS selector, and stability score (0-100).
+   * @param {{ id?: string, attributes?: Record<string, string>, name?: string, tagName: string, textContent?: string, className?: string, cssSelector?: string }} element - Recorded element data
+   * @returns {Array<{ type: string, selector: string, stability: number }>} Locator options sorted by stability
    */
   generateLocatorOptions(element) {
     const options = [];
-    
+
     // Check for test attributes
     if (element.attributes) {
-      const testAttrs = Object.keys(element.attributes).filter(attr => 
+      const testAttrs = Object.keys(element.attributes).filter(attr =>
         ['data-testid', 'data-test', 'data-cy', 'data-qa'].includes(attr));
       testAttrs.forEach(attr => {
         options.push({
@@ -311,7 +307,7 @@ ACTION ${index + 1} (${action.type}):
         });
       });
     }
-    
+
     // Unique ID
     if (element.id && !element.id.match(/^(generated|auto|temp|uid)/i)) {
       options.push({
@@ -320,7 +316,7 @@ ACTION ${index + 1} (${action.type}):
         stability: 90
       });
     }
-    
+
     // ARIA label
     if (element.attributes && element.attributes['aria-label']) {
       options.push({
@@ -329,7 +325,7 @@ ACTION ${index + 1} (${action.type}):
         stability: 85
       });
     }
-    
+
     // Name attribute
     if (element.name) {
       options.push({
@@ -338,7 +334,7 @@ ACTION ${index + 1} (${action.type}):
         stability: 80
       });
     }
-    
+
     // Text content
     if (element.textContent && element.textContent.trim()) {
       const text = element.textContent.trim().substring(0, 30);
@@ -348,7 +344,7 @@ ACTION ${index + 1} (${action.type}):
         stability: 65
       });
     }
-    
+
     // CSS selector as fallback
     if (element.cssSelector) {
       options.push({
@@ -357,7 +353,7 @@ ACTION ${index + 1} (${action.type}):
         stability: 50
       });
     }
-    
+
     return options.sort((a, b) => b.stability - a.stability).slice(0, 3);
   }
 
@@ -367,29 +363,31 @@ ACTION ${index + 1} (${action.type}):
   formatUserJourney(actions) {
     let currentUrl = '';
     let stepCounter = 1;
-    
+
     return actions.map(action => {
       let description = '';
-      
+
       // Page navigation
       if (action.url && action.url !== currentUrl) {
         const pageDesc = this.getPageDescription(action.url);
         description += `Step ${stepCounter++}: Navigate to ${pageDesc}\n`;
         currentUrl = action.url;
       }
-      
+
       // Action description
       if (action.element) {
         const actionDesc = this.getActionDescription(action);
         description += `Step ${stepCounter++}: ${actionDesc}`;
       }
-      
+
       return description;
     }).filter(Boolean).join('\n');
   }
 
   /**
-   * Get action description
+   * Convert a recorded action into a short human-readable description for test comments.
+   * @param {{ type: string, value?: string, key?: string, element: { tagName: string, textContent?: string, placeholder?: string } }} action - Recorded user action
+   * @returns {string} Description like 'Click BUTTON ("Submit")'
    */
   getActionDescription(action) {
     const el = action.element;
@@ -408,7 +406,9 @@ ACTION ${index + 1} (${action.type}):
   }
 
   /**
-   * Get page description from URL
+   * Extract a short page name from a URL (e.g. 'checkout', 'homepage').
+   * @param {string} url - Full URL
+   * @returns {string} Short page descriptor
    */
   getPageDescription(url) {
     try {
@@ -438,7 +438,7 @@ ACTION ${index + 1} (${action.type}):
 
   async callAIProvider(prompt) {
     const provider = this.providers[this.settings.provider];
-    
+
     switch (this.settings.provider) {
       case 'openai':
         return await this.callOpenAI(prompt, provider);
@@ -453,9 +453,9 @@ ACTION ${index + 1} (${action.type}):
 
   async callOpenAI(prompt, provider) {
     // Validate model for OpenAI
-    const validModels = provider.models || ['gpt-4o-mini', 'gpt-4o'];
+    const validModels = provider.models || ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano'];
     let modelToUse = this.settings.model;
-    
+
     if (!validModels.includes(modelToUse)) {
       console.warn(`⚠️ Invalid OpenAI model '${modelToUse}', falling back to '${provider.defaultModel}'`);
       modelToUse = provider.defaultModel;
@@ -465,12 +465,12 @@ ACTION ${index + 1} (${action.type}):
     const maxPromptLength = 50000; // Conservative limit
     let systemPrompt = prompt.systemPrompt || '';
     let userPrompt = prompt.userPrompt || '';
-    
+
     if (systemPrompt.length > maxPromptLength) {
       console.warn(`⚠️ System prompt too long (${systemPrompt.length} chars), truncating to ${maxPromptLength}`);
       systemPrompt = systemPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
     }
-    
+
     if (userPrompt.length > maxPromptLength) {
       console.warn(`⚠️ User prompt too long (${userPrompt.length} chars), truncating to ${maxPromptLength}`);
       userPrompt = userPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
@@ -555,16 +555,19 @@ ACTION ${index + 1} (${action.type}):
   async callGoogleAI(prompt, provider) {
     const model = this.settings.model;
     const endpoint = `${provider.endpoint}${model}:generateContent?key=${this.settings.apiKey}`;
-    
+
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: prompt.systemPrompt }]
+        },
         contents: [{
           parts: [{
-            text: `${prompt.systemPrompt}\n\n${prompt.userPrompt}`
+            text: prompt.userPrompt
           }]
         }],
         generationConfig: {
@@ -591,7 +594,7 @@ ACTION ${index + 1} (${action.type}):
       actionCount: actions?.length || 0,
       reason: 'AI disabled or fallback mode'
     });
-    
+
     const generators = {
       playwright: this.generatePlaywrightTemplate,
       selenium: this.generateSeleniumTemplate,
@@ -607,7 +610,7 @@ ACTION ${index + 1} (${action.type}):
     const templateScript = generator.call(this, actions);
     console.log('✅ TEMPLATE GENERATION COMPLETED (Non-AI)');
     console.log('📏 Template script length:', templateScript?.length || 0, 'characters');
-    
+
     return templateScript;
   }
 
@@ -620,20 +623,26 @@ ACTION ${index + 1} (${action.type}):
     const lines = [
       `import { test, expect } from '@playwright/test';`,
       ``,
-      `test('FlowScribe recorded test', async ({ page }) => {`,
-      `  // Test recorded on ${new Date().toISOString()}`,
-      `  // Total actions: ${actions.length}`,
+      `test.describe('FlowScribe recorded test', () => {`,
+      `  test.beforeEach(async ({ page }) => {`,
+      `    test.setTimeout(60000);`,
+      `  });`,
+      ``,
+      `  test('recorded user flow', async ({ page }) => {`,
+      `    // Test recorded on ${new Date().toISOString()}`,
+      `    // Total actions: ${actions.length}`,
       ``
     ];
 
     let currentUrl = '';
     let stepCounter = 1;
+    let frameVarCounter = 0;
 
     actions.forEach(action => {
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
-        lines.push(`  // Step ${stepCounter++}: Navigate to page`);
-        lines.push(`  await page.goto('${action.url}');`);
-        lines.push(`  await page.waitForLoadState('networkidle');`);
+        lines.push(`    // Step ${stepCounter++}: Navigate to page`);
+        lines.push(`    await page.goto('${action.url}');`);
+        lines.push(`    await page.waitForLoadState('domcontentloaded');`);
         lines.push(``);
         currentUrl = action.url;
       }
@@ -641,40 +650,61 @@ ACTION ${index + 1} (${action.type}):
       switch (action.type) {
         case 'click':
           const clickSelector = this.getBestSelector(action.element);
-          lines.push(`  // Step ${stepCounter++}: Click on ${this.getElementDescription(action.element)}`);
+          lines.push(`    // Step ${stepCounter++}: Click on ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`  await frame.locator('${clickSelector}').click();`);
+            const fVar = `frame${++frameVarCounter}`;
+            lines.push(`    const ${fVar} = page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+            lines.push(`    await ${fVar}.locator('${clickSelector}').click();`);
           } else {
-            lines.push(`  await page.locator('${clickSelector}').click();`);
+            lines.push(`    await expect(page.locator('${clickSelector}')).toBeVisible();`);
+            lines.push(`    await page.locator('${clickSelector}').click();`);
           }
-          lines.push(`  await page.waitForTimeout(500); // Brief pause for UI updates`);
           lines.push(``);
           break;
 
         case 'input':
-        case 'change':
+        case 'change': {
           const inputSelector = this.getBestSelector(action.element);
           const value = action.value || '';
-          lines.push(`  // Step ${stepCounter++}: Enter text in ${this.getElementDescription(action.element)}`);
+          const isSensitive = action.element?.type === 'password' ||
+            /pass(word)?|secret|token|key|auth/i.test(action.element?.name || action.element?.id || '');
+          lines.push(`    // Step ${stepCounter++}: Enter text in ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`  await frame.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+            const fVar = `frame${++frameVarCounter}`;
+            lines.push(`    const ${fVar} = page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+            if (isSensitive) {
+              lines.push(`    // TODO: set TEST_PASSWORD env var (value masked for security)`);
+              lines.push(`    await ${fVar}.locator('${inputSelector}').fill(process.env.TEST_PASSWORD || '');`);
+            } else {
+              lines.push(`    await ${fVar}.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+            }
           } else {
-            lines.push(`  await page.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+            lines.push(`    await expect(page.locator('${inputSelector}')).toBeVisible();`);
+            if (isSensitive) {
+              lines.push(`    // TODO: set TEST_PASSWORD env var (value masked for security)`);
+              lines.push(`    await page.locator('${inputSelector}').fill(process.env.TEST_PASSWORD || '');`);
+            } else {
+              lines.push(`    await page.locator('${inputSelector}').fill('${value.replace(/'/g, "\\'")}');`);
+              if (value) {
+                lines.push(`    await expect(page.locator('${inputSelector}')).toHaveValue('${value.replace(/'/g, "\\'")}');`);
+              }
+            }
           }
           lines.push(``);
           break;
+        }
 
         case 'keydown':
           if (action.key === 'Enter') {
             const enterSelector = this.getBestSelector(action.element);
-            lines.push(`  // Step ${stepCounter++}: Press Enter`);
+            lines.push(`    // Step ${stepCounter++}: Press Enter`);
             if (action.iframeInfo) {
-              lines.push(`  const frame = await page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
-              lines.push(`  await frame.locator('${enterSelector}').press('Enter');`);
+              const fVar = `frame${++frameVarCounter}`;
+              lines.push(`    const ${fVar} = page.frameLocator('iframe[src*="${action.iframeInfo.origin}"]');`);
+              lines.push(`    await ${fVar}.locator('${enterSelector}').press('Enter');`);
             } else {
-              lines.push(`  await page.locator('${enterSelector}').press('Enter');`);
+              lines.push(`    await page.locator('${enterSelector}').press('Enter');`);
+              lines.push(`    await page.waitForLoadState('domcontentloaded');`);
             }
             lines.push(``);
           }
@@ -682,10 +712,13 @@ ACTION ${index + 1} (${action.type}):
       }
     });
 
-    // Add basic assertions
-    lines.push(`  // Verify final page state`);
-    lines.push(`  await expect(page).toHaveURL(/${currentUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/);`);
-    
+    // Verify final page state
+    lines.push(`    // Verify final page state`);
+    if (currentUrl) {
+      lines.push(`    await expect(page).toHaveURL(/${currentUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/);`);
+    }
+
+    lines.push(`  });`);
     lines.push(`});`);
     return lines.join('\n');
   }
@@ -702,16 +735,23 @@ ACTION ${index + 1} (${action.type}):
       `from selenium.webdriver.support.ui import WebDriverWait`,
       `from selenium.webdriver.support import expected_conditions as EC`,
       `from selenium.webdriver.common.keys import Keys`,
-      `import time`,
+      `from selenium.webdriver.chrome.options import Options`,
       ``,
       `# FlowScribe generated test - ${new Date().toISOString()}`,
       `# Total actions: ${actions.length}`,
       ``,
-      `def test_recorded_workflow():`,
-      `    driver = webdriver.Chrome()`,
-      `    wait = WebDriverWait(driver, 10)`,
-      `    `,
-      `    try:`
+      `class TestRecordedWorkflow:`,
+      `    def setup_method(self):`,
+      `        options = Options()`,
+      `        options.add_argument('--start-maximized')`,
+      `        self.driver = webdriver.Chrome(options=options)`,
+      `        self.wait = WebDriverWait(self.driver, 10)`,
+      ``,
+      `    def teardown_method(self):`,
+      `        if self.driver:`,
+      `            self.driver.quit()`,
+      ``,
+      `    def test_recorded_workflow(self):`
     ];
 
     let currentUrl = '';
@@ -720,8 +760,8 @@ ACTION ${index + 1} (${action.type}):
     actions.forEach(action => {
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
         lines.push(`        # Step ${stepCounter++}: Navigate to page`);
-        lines.push(`        driver.get("${action.url}")`);
-        lines.push(`        time.sleep(2)  # Wait for page load`);
+        lines.push(`        self.driver.get("${action.url}")`);
+        lines.push(`        self.wait.until(lambda d: d.execute_script('return document.readyState') == 'complete')`);
         lines.push(``);
         currentUrl = action.url;
       }
@@ -731,15 +771,14 @@ ACTION ${index + 1} (${action.type}):
           const clickSelector = this.getBestSelectorForSelenium(action.element);
           lines.push(`        # Step ${stepCounter++}: Click on ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`        driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[src*='${action.iframeInfo.origin}']"))`);
-            lines.push(`        element = wait.until(EC.element_to_be_clickable((${clickSelector})))`);
+            lines.push(`        self.driver.switch_to.frame(self.driver.find_element(By.CSS_SELECTOR, "iframe[src*='${action.iframeInfo.origin}']"))`);
+            lines.push(`        element = self.wait.until(EC.element_to_be_clickable((${clickSelector})))`);
             lines.push(`        element.click()`);
-            lines.push(`        driver.switch_to.default_content()`);
+            lines.push(`        self.driver.switch_to.default_content()`);
           } else {
-            lines.push(`        element = wait.until(EC.element_to_be_clickable((${clickSelector})))`);
+            lines.push(`        element = self.wait.until(EC.element_to_be_clickable((${clickSelector})))`);
             lines.push(`        element.click()`);
           }
-          lines.push(`        time.sleep(0.5)`);
           lines.push(``);
           break;
 
@@ -749,15 +788,16 @@ ACTION ${index + 1} (${action.type}):
           const value = action.value || '';
           lines.push(`        # Step ${stepCounter++}: Enter text in ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`        driver.switch_to.frame(driver.find_element(By.CSS_SELECTOR, "iframe[src*='${action.iframeInfo.origin}']"))`);
-            lines.push(`        element = wait.until(EC.presence_of_element_located((${inputSelector})))`);
-            lines.push(`        element.clear()`);
+            lines.push(`        self.driver.switch_to.frame(self.driver.find_element(By.CSS_SELECTOR, "iframe[src*='${action.iframeInfo.origin}']"))`);
+            lines.push(`        element = self.wait.until(EC.presence_of_element_located((${inputSelector})))`);
             lines.push(`        element.send_keys("${value.replace(/"/g, '\\"')}")`);
-            lines.push(`        driver.switch_to.default_content()`);
+            lines.push(`        self.driver.switch_to.default_content()`);
           } else {
-            lines.push(`        element = wait.until(EC.presence_of_element_located((${inputSelector})))`);
-            lines.push(`        element.clear()`);
+            lines.push(`        element = self.wait.until(EC.presence_of_element_located((${inputSelector})))`);
             lines.push(`        element.send_keys("${value.replace(/"/g, '\\"')}")`);
+            if (value) {
+              lines.push(`        assert element.get_attribute("value") == "${value.replace(/"/g, '\\"')}"`);
+            }
           }
           lines.push(``);
           break;
@@ -765,14 +805,10 @@ ACTION ${index + 1} (${action.type}):
     });
 
     lines.push(`        # Verify final state`);
-    lines.push(`        assert "${currentUrl}" in driver.current_url`);
-    lines.push(``);
-    lines.push(`    finally:`);
-    lines.push(`        driver.quit()`);
-    lines.push(``);
-    lines.push(`if __name__ == "__main__":`);
-    lines.push(`    test_recorded_workflow()`);
-    
+    if (currentUrl) {
+      lines.push(`        assert "${currentUrl}" in self.driver.current_url`);
+    }
+
     return lines.join('\n');
   }
 
@@ -787,6 +823,10 @@ ACTION ${index + 1} (${action.type}):
       `// Total actions: ${actions.length}`,
       ``,
       `describe('FlowScribe recorded test', () => {`,
+      `  beforeEach(() => {`,
+      `    cy.viewport(1280, 720);`,
+      `  });`,
+      ``,
       `  it('should complete the recorded workflow', () => {`
     ];
 
@@ -797,7 +837,6 @@ ACTION ${index + 1} (${action.type}):
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
         lines.push(`    // Step ${stepCounter++}: Navigate to page`);
         lines.push(`    cy.visit('${action.url}');`);
-        lines.push(`    cy.wait(1000);`);
         lines.push(``);
         currentUrl = action.url;
       }
@@ -822,9 +861,12 @@ ACTION ${index + 1} (${action.type}):
           lines.push(`    // Step ${stepCounter++}: Enter text in ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
             lines.push(`    cy.frameLoaded('iframe[src*="${action.iframeInfo.origin}"]');`);
-            lines.push(`    cy.iframe().find('${inputSelector}').clear().type('${value.replace(/'/g, "\\'")}');`);
+            lines.push(`    cy.iframe().find('${inputSelector}').type('${value.replace(/'/g, "\\'")}');`);
           } else {
-            lines.push(`    cy.get('${inputSelector}').should('be.visible').clear().type('${value.replace(/'/g, "\\'")}');`);
+            lines.push(`    cy.get('${inputSelector}').should('be.visible').type('${value.replace(/'/g, "\\'")}');`);
+            if (value) {
+              lines.push(`    cy.get('${inputSelector}').should('have.value', '${value.replace(/'/g, "\\'")}');`);
+            }
           }
           lines.push(``);
           break;
@@ -832,10 +874,16 @@ ACTION ${index + 1} (${action.type}):
     });
 
     lines.push(`    // Verify final state`);
-    lines.push(`    cy.url().should('include', '${new URL(currentUrl).pathname}');`);
+    if (currentUrl) {
+      try {
+        lines.push(`    cy.url().should('include', '${new URL(currentUrl).pathname}');`);
+      } catch (e) {
+        lines.push(`    cy.url().should('not.be.empty');`);
+      }
+    }
     lines.push(`  });`);
     lines.push(`});`);
-    
+
     return lines.join('\n');
   }
 
@@ -847,19 +895,31 @@ ACTION ${index + 1} (${action.type}):
 
     const lines = [
       `const puppeteer = require('puppeteer');`,
+      `const assert = require('assert');`,
       ``,
       `// FlowScribe generated test - ${new Date().toISOString()}`,
       `// Total actions: ${actions.length}`,
       ``,
-      `(async () => {`,
-      `  const browser = await puppeteer.launch({ headless: false });`,
-      `  const page = await browser.newPage();`,
-      `  `,
-      `  try {`
+      `describe('FlowScribe recorded test', () => {`,
+      `  let browser;`,
+      `  let page;`,
+      ``,
+      `  beforeAll(async () => {`,
+      `    browser = await puppeteer.launch({ headless: false, defaultViewport: { width: 1280, height: 720 } });`,
+      `    page = await browser.newPage();`,
+      `    page.setDefaultTimeout(30000);`,
+      `  });`,
+      ``,
+      `  afterAll(async () => {`,
+      `    if (browser) await browser.close();`,
+      `  });`,
+      ``,
+      `  test('recorded user flow', async () => {`
     ];
 
     let currentUrl = '';
     let stepCounter = 1;
+    let frameVarCounter = 0;
 
     actions.forEach(action => {
       if (action.type === 'navigation' || (action.url && action.url !== currentUrl)) {
@@ -874,14 +934,14 @@ ACTION ${index + 1} (${action.type}):
           const clickSelector = this.getBestSelector(action.element);
           lines.push(`    // Step ${stepCounter++}: Click on ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`    const frame = await page.frames().find(frame => frame.url().includes('${action.iframeInfo.origin}'));`);
-            lines.push(`    await frame.waitForSelector('${clickSelector}');`);
-            lines.push(`    await frame.click('${clickSelector}');`);
+            const fVar = `frame${++frameVarCounter}`;
+            lines.push(`    const ${fVar} = page.frames().find(f => f.url().includes('${action.iframeInfo.origin}'));`);
+            lines.push(`    await ${fVar}.waitForSelector('${clickSelector}');`);
+            lines.push(`    await ${fVar}.click('${clickSelector}');`);
           } else {
-            lines.push(`    await page.waitForSelector('${clickSelector}');`);
+            lines.push(`    await page.waitForSelector('${clickSelector}', { visible: true });`);
             lines.push(`    await page.click('${clickSelector}');`);
           }
-          lines.push(`    await page.waitForTimeout(500);`);
           lines.push(``);
           break;
 
@@ -891,12 +951,17 @@ ACTION ${index + 1} (${action.type}):
           const value = action.value || '';
           lines.push(`    // Step ${stepCounter++}: Enter text in ${this.getElementDescription(action.element)}`);
           if (action.iframeInfo) {
-            lines.push(`    const frame = await page.frames().find(frame => frame.url().includes('${action.iframeInfo.origin}'));`);
-            lines.push(`    await frame.waitForSelector('${inputSelector}');`);
-            lines.push(`    await frame.type('${inputSelector}', '${value.replace(/'/g, "\\'")}');`);
+            const fVar = `frame${++frameVarCounter}`;
+            lines.push(`    const ${fVar} = page.frames().find(f => f.url().includes('${action.iframeInfo.origin}'));`);
+            lines.push(`    await ${fVar}.waitForSelector('${inputSelector}');`);
+            lines.push(`    await ${fVar}.type('${inputSelector}', '${value.replace(/'/g, "\\'")}');`);
           } else {
-            lines.push(`    await page.waitForSelector('${inputSelector}');`);
+            lines.push(`    await page.waitForSelector('${inputSelector}', { visible: true });`);
             lines.push(`    await page.type('${inputSelector}', '${value.replace(/'/g, "\\'")}');`);
+            if (value) {
+              lines.push(`    const val = await page.$eval('${inputSelector}', el => el.value);`);
+              lines.push(`    assert.strictEqual(val, '${value.replace(/'/g, "\\'")}');`);
+            }
           }
           lines.push(``);
           break;
@@ -904,68 +969,82 @@ ACTION ${index + 1} (${action.type}):
     });
 
     lines.push(`    // Verify final state`);
-    lines.push(`    console.log('Final URL:', page.url());`);
-    lines.push(``);
-    lines.push(`  } catch (error) {`);
-    lines.push(`    console.error('Test failed:', error);`);
-    lines.push(`  } finally {`);
-    lines.push(`    await browser.close();`);
-    lines.push(`  }`);
-    lines.push(`})();`);
-    
+    if (currentUrl) {
+      lines.push(`    assert.ok(page.url().includes('${currentUrl}'), 'Expected URL to include ${currentUrl}');`);
+    }
+    lines.push(`  });`);
+    lines.push(`});`);
+
     return lines.join('\n');
   }
 
+  /**
+   * Return the most stable CSS selector for an element using a priority hierarchy:
+   * id > data-testid > name > aria-label > cssSelector > tagName.
+   * @param {{ id?: string, attributes?: Record<string, string>, name?: string, tagName: string, cssSelector?: string }} element - Recorded element data
+   * @returns {string} Best CSS selector string
+   */
   getBestSelector(element) {
     // Priority order for selectors
     if (element.id) {
       return `#${element.id}`;
     }
-    
+
     // Check for test-specific attributes
     if (element.attributes) {
       if (element.attributes['data-testid']) return `[data-testid="${element.attributes['data-testid']}"]`;
       if (element.attributes['data-test']) return `[data-test="${element.attributes['data-test']}"]`;
       if (element.attributes['data-cy']) return `[data-cy="${element.attributes['data-cy']}"]`;
     }
-    
+
     if (element.name && ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName)) {
       return `[name="${element.name}"]`;
     }
-    
+
     // Use aria-label if available
     if (element.attributes && element.attributes['aria-label']) {
       return `[aria-label="${element.attributes['aria-label']}"]`;
     }
-    
+
     if (element.cssSelector) {
       return element.cssSelector;
     }
-    
+
     return element.tagName.toLowerCase();
   }
 
+  /**
+   * Return a Selenium-style locator string (e.g. 'By.ID, "foo"') using the same
+   * priority hierarchy as getBestSelector.
+   * @param {{ id?: string, attributes?: Record<string, string>, name?: string, tagName: string, cssSelector?: string }} element - Recorded element data
+   * @returns {string} Selenium By-locator string
+   */
   getBestSelectorForSelenium(element) {
     if (element.id) {
       return `By.ID, "${element.id}"`;
     }
-    
+
     if (element.attributes) {
       if (element.attributes['data-testid']) return `By.CSS_SELECTOR, "[data-testid='${element.attributes['data-testid']}']"`;
       if (element.attributes['data-test']) return `By.CSS_SELECTOR, "[data-test='${element.attributes['data-test']}']"`;
     }
-    
+
     if (element.name && ['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName)) {
       return `By.NAME, "${element.name}"`;
     }
-    
+
     if (element.cssSelector) {
       return `By.CSS_SELECTOR, "${element.cssSelector}"`;
     }
-    
+
     return `By.TAG_NAME, "${element.tagName.toLowerCase()}"`;
   }
 
+  /**
+   * Generate a human-readable description of an element for use in test comments.
+   * @param {{ id?: string, name?: string, tagName: string, textContent?: string, placeholder?: string }} element - Recorded element data
+   * @returns {string} Human-readable element description
+   */
   getElementDescription(element) {
     if (element.id) return `element with ID "${element.id}"`;
     if (element.name) return `${element.tagName.toLowerCase()} with name "${element.name}"`;
@@ -976,7 +1055,7 @@ ACTION ${index + 1} (${action.type}):
 
   async generateAssertions(actions, framework) {
     const assertions = [];
-    
+
     // Analyze actions to suggest meaningful assertions
     actions.forEach((action, index) => {
       switch (action.type) {
@@ -989,7 +1068,7 @@ ACTION ${index + 1} (${action.type}):
             });
           }
           break;
-          
+
         case 'input':
           if (action.element.type === 'email') {
             assertions.push({
@@ -1000,7 +1079,7 @@ ACTION ${index + 1} (${action.type}):
             });
           }
           break;
-          
+
         case 'navigation':
           assertions.push({
             type: 'url_validation',

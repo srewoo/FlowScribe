@@ -42,6 +42,26 @@ class EnhancedRecorder {
 
     // Dialog/modal tracking
     this.openDialogs = new Set();
+
+    // Array size limits to prevent memory leaks
+    this.MAX_ACTIONS = 1000;
+    this.MAX_NETWORK_REQUESTS = 500;
+    this.MAX_CONSOLE_ERRORS = 100;
+    this.MAX_PAGE_STATES = 50;
+
+    // Throttle/debounce timings (ms)
+    this.THROTTLE_MOUSEMOVE = 100;
+    this.THROTTLE_SCROLL = 200;
+    this.THROTTLE_RESIZE = 500;
+    this.THROTTLE_TOUCH = 100;
+    this.DEBOUNCE_SELECTION = 300;
+  }
+
+  pushNetworkRequest(entry) {
+    if (this.networkRequests.length >= this.MAX_NETWORK_REQUESTS) {
+      this.networkRequests.splice(0, 50); // Remove oldest 50 entries in bulk
+    }
+    this.networkRequests.push(entry);
   }
 
   startRecording() {
@@ -54,6 +74,7 @@ class EnhancedRecorder {
     this.setupObservers();
     this.setupNetworkInterception();
     this.injectRecordingIndicator();
+    this.detectCrossOriginIframes();
 
     console.log('🎬 Enhanced recording started');
   }
@@ -89,7 +110,7 @@ class EnhancedRecorder {
       'mouseup': this.handleMouseUp.bind(this),
       'mouseover': this.handleMouseOver.bind(this),
       'mouseout': this.handleMouseOut.bind(this),
-      'mousemove': this.throttle(this.handleMouseMove.bind(this), 100),
+      'mousemove': this.throttle(this.handleMouseMove.bind(this), this.THROTTLE_MOUSEMOVE),
 
       // Keyboard events
       'keydown': this.handleKeyDown.bind(this),
@@ -106,11 +127,11 @@ class EnhancedRecorder {
       'invalid': this.handleInvalid.bind(this),
 
       // Scroll events
-      'scroll': this.throttle(this.handleScroll.bind(this), 200),
-      'wheel': this.throttle(this.handleWheel.bind(this), 200),
+      'scroll': this.throttle(this.handleScroll.bind(this), this.THROTTLE_SCROLL),
+      'wheel': this.throttle(this.handleWheel.bind(this), this.THROTTLE_SCROLL),
 
       // Window events
-      'resize': this.throttle(this.handleResize.bind(this), 500),
+      'resize': this.throttle(this.handleResize.bind(this), this.THROTTLE_RESIZE),
       'orientationchange': this.handleOrientationChange.bind(this),
 
       // Drag events
@@ -122,7 +143,7 @@ class EnhancedRecorder {
       // Touch events (for mobile testing)
       'touchstart': this.handleTouchStart.bind(this),
       'touchend': this.handleTouchEnd.bind(this),
-      'touchmove': this.throttle(this.handleTouchMove.bind(this), 100),
+      'touchmove': this.throttle(this.handleTouchMove.bind(this), this.THROTTLE_TOUCH),
 
       // Media events
       'play': this.handleMediaPlay.bind(this),
@@ -141,7 +162,7 @@ class EnhancedRecorder {
       'pagehide': this.handlePageHide.bind(this),
 
       // Text selection event
-      'selectionchange': this.debounce(this.handleSelectionChange.bind(this), 300),
+      'selectionchange': this.debounce(this.handleSelectionChange.bind(this), this.DEBOUNCE_SELECTION),
 
       // Animation events for auto-fill detection
       'animationstart': this.handleAnimationStart.bind(this)
@@ -228,6 +249,11 @@ class EnhancedRecorder {
     // Store reference to recorder instance for use in interceptors
     const recorder = this;
 
+    // Store originals for cleanup
+    this._originalFetch = window.fetch;
+    this._originalXHROpen = XMLHttpRequest.prototype.open;
+    this._originalXHRSend = XMLHttpRequest.prototype.send;
+
     // Intercept fetch requests
     const originalFetch = window.fetch;
     window.fetch = async (...args) => {
@@ -244,7 +270,7 @@ class EnhancedRecorder {
         body: config?.body
       };
 
-      recorder.networkRequests.push({
+      recorder.pushNetworkRequest({
         type: 'request',
         ...request
       });
@@ -253,7 +279,7 @@ class EnhancedRecorder {
         const response = await originalFetch(...args);
         const responseClone = response.clone();
 
-        recorder.networkRequests.push({
+        recorder.pushNetworkRequest({
           type: 'response',
           id: requestId,
           status: response.status,
@@ -265,7 +291,7 @@ class EnhancedRecorder {
         // Capture response body if it's JSON or text
         if (response.headers.get('content-type')?.includes('json')) {
           responseClone.json().then(data => {
-            recorder.networkRequests.push({
+            recorder.pushNetworkRequest({
               type: 'response-body',
               id: requestId,
               data
@@ -275,7 +301,7 @@ class EnhancedRecorder {
 
         return response;
       } catch (error) {
-        recorder.networkRequests.push({
+        recorder.pushNetworkRequest({
           type: 'error',
           id: requestId,
           error: error.message,
@@ -302,7 +328,7 @@ class EnhancedRecorder {
       const startTime = performance.now();
 
       this.addEventListener('load', () => {
-        recorder.networkRequests.push({
+        recorder.pushNetworkRequest({
           type: 'xhr-response',
           id: requestId,
           status: xhr.status,
@@ -312,7 +338,7 @@ class EnhancedRecorder {
         });
       });
 
-      recorder.networkRequests.push({
+      recorder.pushNetworkRequest({
         type: 'xhr-request',
         id: requestId,
         method: this._method,
@@ -507,10 +533,56 @@ class EnhancedRecorder {
       }
     });
 
+    // Detect shadow DOM ancestry
+    const shadowPath = this.getShadowPath(element);
+    if (shadowPath) info.shadowPath = shadowPath;
+
     // Cache element info for performance
     this.elementCache.set(element, info);
 
     return info;
+  }
+
+  detectCrossOriginIframes() {
+    const iframes = Array.from(document.querySelectorAll('iframe'));
+    const crossOriginSrcs = [];
+    for (const iframe of iframes) {
+      try {
+        // Same-origin iframes expose contentDocument; cross-origin throws
+        const doc = iframe.contentDocument;
+        if (!doc) throw new Error('no access');
+      } catch {
+        const src = iframe.src || iframe.getAttribute('src') || 'unknown';
+        if (src && src !== 'about:blank') {
+          try { crossOriginSrcs.push(new URL(src).origin); } catch { crossOriginSrcs.push(src); }
+        }
+      }
+    }
+    if (crossOriginSrcs.length > 0) {
+      this.recordAction({
+        id: this.generateActionId(),
+        type: 'cross_origin_iframes_detected',
+        origins: [...new Set(crossOriginSrcs)],
+        timestamp: Date.now()
+      });
+    }
+  }
+
+  getShadowPath(element) {
+    const segments = [];
+    let node = element;
+    while (node && node !== document.documentElement) {
+      const root = node.getRootNode();
+      if (root instanceof ShadowRoot) {
+        const innerSel = this.generateOptimalSelector(node);
+        const hostSel = this.generateOptimalSelector(root.host);
+        segments.unshift({ host: hostSel, inner: innerSel });
+        node = root.host;
+      } else {
+        break;
+      }
+    }
+    return segments.length > 0 ? segments : null;
   }
 
   generateOptimalSelector(element) {
@@ -608,33 +680,39 @@ class EnhancedRecorder {
   generateXPath(element) {
     if (!element) return '';
 
-    if (element.id) {
-      return `//*[@id="${element.id}"]`;
-    }
-
-    const parts = [];
-    let current = element;
-
-    while (current && current.nodeType === Node.ELEMENT_NODE) {
-      let index = 0;
-      let sibling = current.previousSibling;
-
-      while (sibling) {
-        if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === current.nodeName) {
-          index++;
-        }
-        sibling = sibling.previousSibling;
+    // Prefer attribute-based XPath (stable) over positional (fragile)
+    const stableAttrs = ['data-testid', 'data-test', 'data-cy', 'data-qa', 'aria-label', 'name', 'id'];
+    for (const attr of stableAttrs) {
+      const val = element.getAttribute ? element.getAttribute(attr) : element[attr];
+      if (val) {
+        const tag = element.nodeName.toLowerCase();
+        return `//${tag}[@${attr}="${val}"]`;
       }
-
-      const tagName = current.nodeName.toLowerCase();
-      const xpathIndex = index > 0 ? `[${index + 1}]` : '[1]';
-      parts.unshift(`${tagName}${xpathIndex}`);
-
-      current = current.parentNode;
-      if (current === document.body) break;
     }
 
-    return parts.length ? `//${parts.join('/')}` : '';
+    // For inputs without stable attributes, use type+placeholder
+    if (element.nodeName === 'INPUT' && element.placeholder) {
+      return `//input[@placeholder="${element.placeholder}"]`;
+    }
+
+    // Walk up at most 3 levels looking for a stable anchor
+    let current = element;
+    let depth = 0;
+    while (current && current !== document.body && depth < 3) {
+      for (const attr of ['id', 'data-testid', 'aria-label']) {
+        const val = current.getAttribute ? current.getAttribute(attr) : null;
+        if (val) {
+          // Anchor to this ancestor, then express remaining path
+          const tag = element.nodeName.toLowerCase();
+          return `//*[@${attr}="${val}"]//${tag}`;
+        }
+      }
+      current = current.parentElement;
+      depth++;
+    }
+
+    // Return empty — callers should fall through to CSS selector instead
+    return '';
   }
 
   isUnique(selector) {
@@ -837,7 +915,10 @@ class EnhancedRecorder {
     action.url = window.location.href;
     action.pageTitle = document.title;
 
-    // Store action
+    // Store action (cap to prevent memory leaks)
+    if (this.actions.length >= this.MAX_ACTIONS) {
+      this.actions.shift();
+    }
     this.actions.push(action);
 
     // Send to background script
@@ -2211,21 +2292,8 @@ class EnhancedRecorder {
   // LOW PRIORITY: Console Error Capture
   // ============================================
   setupConsoleErrorCapture() {
-    const originalError = console.error;
-    const originalWarn = console.warn;
-
-    console.error = (...args) => {
-      this.captureConsoleMessage('error', args);
-      originalError.apply(console, args);
-    };
-
-    console.warn = (...args) => {
-      this.captureConsoleMessage('warning', args);
-      originalWarn.apply(console, args);
-    };
-
-    // Capture unhandled errors
-    window.addEventListener('error', (event) => {
+    // Capture unhandled errors (no console.error/warn override to avoid breaking page)
+    this._errorHandler = (event) => {
       this.recordAction({
         id: this.generateActionId(),
         type: 'javascript_error',
@@ -2236,10 +2304,11 @@ class EnhancedRecorder {
         colno: event.colno,
         stack: event.error?.stack
       });
-    });
+    };
+    window.addEventListener('error', this._errorHandler);
 
     // Capture unhandled promise rejections
-    window.addEventListener('unhandledrejection', (event) => {
+    this._rejectionHandler = (event) => {
       this.recordAction({
         id: this.generateActionId(),
         type: 'unhandled_promise_rejection',
@@ -2247,7 +2316,8 @@ class EnhancedRecorder {
         reason: String(event.reason),
         stack: event.reason?.stack
       });
-    });
+    };
+    window.addEventListener('unhandledrejection', this._rejectionHandler);
   }
 
   captureConsoleMessage(level, args) {
@@ -2262,6 +2332,9 @@ class EnhancedRecorder {
       return String(arg);
     }).join(' ');
 
+    if (this.consoleErrors.length >= this.MAX_CONSOLE_ERRORS) {
+      this.consoleErrors.shift();
+    }
     this.consoleErrors.push({
       id: this.generateActionId(),
       type: `console_${level}`,
@@ -2427,9 +2500,33 @@ class EnhancedRecorder {
       this.dateTimeObserver.disconnect();
     }
 
+    // Clean up error listeners
+    if (this._errorHandler) {
+      window.removeEventListener('error', this._errorHandler);
+    }
+    if (this._rejectionHandler) {
+      window.removeEventListener('unhandledrejection', this._rejectionHandler);
+    }
+
+    // Restore network interception
+    if (this._originalFetch) {
+      window.fetch = this._originalFetch;
+    }
+    if (this._originalXHROpen) {
+      XMLHttpRequest.prototype.open = this._originalXHROpen;
+    }
+    if (this._originalXHRSend) {
+      XMLHttpRequest.prototype.send = this._originalXHRSend;
+    }
+
     // Clean up intervals
     if (this.autoFillCheckInterval) {
       clearInterval(this.autoFillCheckInterval);
+    }
+
+    // Clean up debounce timers
+    if (this.inputDebounceTimer) {
+      clearTimeout(this.inputDebounceTimer);
     }
 
     // Flush any pending keyboard input buffers

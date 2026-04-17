@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlowScribe",
-  "version": "2.1.0",
+  "version": "4.0",
   "description": "From Navigation to Automation",
   "permissions": [
     "activeTab",
@@ -14,19 +14,21 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_title": "FlowScribe - Record Browser Interactions",
     "default_icon": {
       "16": "icons/icon16.png",
@@ -44,23 +46,25 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "popup.html",
+        "popup.css",
+        "popup.js",
+        "lib/*",
         "content.js",
         "enhanced-recorder.js",
         "iframe-recorder.js",
         "network-recorder.js",
-        "self-healing/self-healing-engine.js",
         "ai-service.js",
         "assertion-generator.js",
-        "test-generator.js",
         "wait-strategy.js",
-        "cicd-manager.js",
-        "page-object-generator.js",
         "settings-manager.js",
         "input-sanitizer.js",
         "error-handler.js",
         "browser-api.js"
       ],
-      "matches": ["<all_urls>"]
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "content_security_policy": {

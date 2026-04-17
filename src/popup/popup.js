@@ -26,22 +26,24 @@ class FlowScribeUI {
     this.currentTab = 'record';
     this.isPickerActive = false;
     this.selectedAssertionType = 'visible';
+    this.disabledActionIds = new Set();
+    this.hiddenActionTypes = new Set();
 
     // Model options for different providers
     this.modelOptions = {
       openai: [
-        { value: 'gpt-4o', label: 'GPT-4o (Latest)' },
-        { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Fast)' }
+        { value: 'gpt-4.1', label: 'GPT-4.1 (Latest)' },
+        { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini (Fast)' },
+        { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano (Fastest)' }
       ],
       anthropic: [
-        { value: 'claude-3-5-sonnet-20241022', label: 'Claude 3.5 Sonnet (Latest)' },
-        { value: 'claude-3-opus-20240229', label: 'Claude 3 Opus' },
-        { value: 'claude-3-haiku-20240307', label: 'Claude 3 Haiku (Fast)' }
+        { value: 'claude-sonnet-4-5-20250514', label: 'Claude Sonnet 4.5 (Latest)' },
+        { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (Fast)' }
       ],
       google: [
-        { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-        { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash (Fast)' },
-        { value: 'gemini-pro', label: 'Gemini Pro' }
+        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Latest)' },
+        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Fast)' },
+        { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' }
       ]
     };
     this.durationTimer = null;
@@ -50,15 +52,41 @@ class FlowScribeUI {
   }
 
   async init() {
+    this.isPanelMode = window.parent !== window;
     this.detectBrowser();
     this.bindElements();
     this.setupEventListeners();
+    this.setupPanelMode();
     await this.loadSettings();
     await this.loadCurrentState();
     await this.loadHistory();
     await this.loadAssertions();
     await this.checkForPickedElement();
     this.updateUI();
+  }
+
+  /**
+   * Detect if running inside the floating panel iframe
+   * and set up panel-specific behavior
+   */
+  setupPanelMode() {
+    if (!this.isPanelMode) return;
+    document.body.classList.add('panel-mode');
+    // Override the fixed 420px width on html element
+    document.documentElement.style.width = '100%';
+    document.documentElement.style.maxHeight = 'none';
+    document.documentElement.style.minHeight = '0';
+  }
+
+  /**
+   * Close or minimize the UI — in panel mode minimize instead of closing
+   */
+  closeUI() {
+    if (this.isPanelMode) {
+      window.parent.postMessage({ type: 'flowscribe-minimize' }, '*');
+    } else {
+      window.close();
+    }
   }
 
   /**
@@ -185,19 +213,21 @@ class FlowScribeUI {
     this.enableSelfHealing = document.getElementById('enableSelfHealing');
     this.enableNetworkRecording = document.getElementById('enableNetworkRecording');
     this.enablePOMGeneration = document.getElementById('enablePOMGeneration');
+    this.includeScreenshots = document.getElementById('includeScreenshots');
+    this.aiFallbackNotice = document.getElementById('aiFallbackNotice');
+    this.aiFallbackMessage = document.getElementById('aiFallbackMessage');
     this.enableAIToggle = document.getElementById('enableAIToggle');
     this.aiConfig = document.getElementById('aiConfig');
     this.aiProvider = document.getElementById('aiProvider');
     this.aiModel = document.getElementById('aiModel');
     this.apiKey = document.getElementById('apiKey');
     this.toggleApiKeyBtn = document.getElementById('toggleApiKeyBtn');
-    this.cicdPlatform = document.getElementById('cicdPlatform');
 
     // Script modal elements
     this.closeScriptBtn = document.getElementById('closeScriptBtn');
     this.copyScriptBtn = document.getElementById('copyScriptBtn');
-    this.exportOptionsBtn = document.getElementById('exportOptionsBtn');
-    this.exportOptions = document.getElementById('exportOptions');
+    this.downloadScriptBtn = document.getElementById('downloadScriptBtn');
+    this.downloadPOMBtn = document.getElementById('downloadPOMBtn');
 
     // Actions list elements
     this.actionsPanel = document.getElementById('actionsPanel');
@@ -207,6 +237,7 @@ class FlowScribeUI {
     this.actionsBody = document.getElementById('actionsBody');
     this.toggleActionsBtn = document.getElementById('toggleActionsBtn');
     this.clearActionsBtn = document.getElementById('clearActionsBtn');
+    this.actionsFilterBar = document.getElementById('actionsFilterBar');
 
     // UI elements
     this.toast = document.getElementById('toast');
@@ -289,16 +320,8 @@ class FlowScribeUI {
     // Script modal
     this.closeScriptBtn.addEventListener('click', () => this.closeScriptModal());
     this.copyScriptBtn.addEventListener('click', () => this.copyScript());
-    this.exportOptionsBtn.addEventListener('click', () => this.toggleExportOptions());
-
-    // Export options
-    document.querySelectorAll('[data-export]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const exportType = e.target.getAttribute('data-export');
-        this.exportScript(exportType);
-      });
-    });
-
+    this.downloadScriptBtn.addEventListener('click', () => this.downloadScript());
+    this.downloadPOMBtn.addEventListener('click', () => this.downloadPOMFiles());
     // Actions list events
     this.toggleActionsBtn.addEventListener('click', () => this.toggleActionsList());
     this.clearActionsBtn.addEventListener('click', () => this.clearActionsList());
@@ -342,7 +365,9 @@ class FlowScribeUI {
   switchTab(tabId) {
     // Update tab buttons
     this.tabBtns.forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tab === tabId);
+      const isActive = btn.dataset.tab === tabId;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', String(isActive));
     });
 
     // Update tab contents
@@ -797,12 +822,11 @@ class FlowScribeUI {
       selectedFramework: 'playwright',
       enableAI: false,
       aiProvider: 'openai',
-      aiModel: 'gpt-4o',
+      aiModel: 'gpt-4.1-mini',
       apiKey: '',
       enableSelfHealing: true,
       enableNetworkRecording: true,
       enablePOMGeneration: true,
-      cicdPlatform: 'github-actions'
     };
   }
 
@@ -818,13 +842,12 @@ class FlowScribeUI {
     if (this.enableSelfHealing) this.enableSelfHealing.checked = this.settings.enableSelfHealing !== false;
     if (this.enableNetworkRecording) this.enableNetworkRecording.checked = this.settings.enableNetworkRecording !== false;
     if (this.enablePOMGeneration) this.enablePOMGeneration.checked = this.settings.enablePOMGeneration !== false;
+    if (this.includeScreenshots) this.includeScreenshots.checked = this.settings.includeScreenshots || false;
 
     // Apply AI settings
     if (this.enableAIToggle) this.enableAIToggle.checked = this.settings.enableAI || false;
     if (this.aiProvider) this.aiProvider.value = this.settings.aiProvider || 'openai';
     if (this.apiKey) this.apiKey.value = this.settings.apiKey || '';
-    if (this.cicdPlatform) this.cicdPlatform.value = this.settings.cicdPlatform || 'github-actions';
-
     // Update model options and set selected model
     this.updateModelOptions();
     if (this.aiModel && this.settings.aiModel) {
@@ -992,6 +1015,9 @@ class FlowScribeUI {
       this.hideLoading();
       this.showToast('Recording started! Interact with the page.', 'success');
 
+      // Close popup (or minimize panel) so the recording pill is visible on the web page
+      this.closeUI();
+
     } catch (error) {
       this.hideLoading();
       this.showToast(`Error: ${error.message}`, 'error');
@@ -1069,7 +1095,8 @@ class FlowScribeUI {
 
   // ===== Script Generation =====
   async generateScript() {
-    if (this.actions.length === 0) {
+    const enabledActions = this.getEnabledActions();
+    if (enabledActions.length === 0) {
       this.showToast('No actions to generate script from', 'error');
       return;
     }
@@ -1080,19 +1107,21 @@ class FlowScribeUI {
     }
 
     try {
-      this.showLoading('Generating script...');
+      const providerName = this.settings.enableAI ? ` with ${this.settings.aiProvider || 'AI'}` : '';
+      this.showLoading(`Generating script${providerName}...`);
 
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_SCRIPT',
         data: {
           framework: this.selectedFramework,
-          actions: this.actions,
+          actions: enabledActions,
           assertions: this.assertions,
           options: {
             includeAssertions: this.assertions.length > 0,
             includeNetworkAssertions: this.settings.enableNetworkRecording,
             applySelfHealing: this.settings.enableSelfHealing,
             generatePageObjects: this.settings.enablePOMGeneration,
+            includeScreenshots: this.settings.includeScreenshots,
             addComments: true,
             testName: this.currentSession?.title || 'FlowScribe Test'
           }
@@ -1103,10 +1132,22 @@ class FlowScribeUI {
         throw new Error(response.error || 'Failed to generate script');
       }
 
-      this.displayScript(response.script);
+      const aiActuallyUsed = response.aiUsed !== false;
+      const showAIFallback = this.settings.enableAI && !aiActuallyUsed;
+      if (showAIFallback && this.aiFallbackMessage) {
+        const reasons = {
+          validation_failed: 'AI output failed validation',
+          api_error: 'AI API error',
+          empty_response: 'AI returned empty response',
+          not_configured: 'AI not configured'
+        };
+        this.aiFallbackMessage.textContent = `AI generation failed (${reasons[response.fallbackReason] || 'unknown'}) — using template output.`;
+      }
+
+      this.displayScript(response.script, showAIFallback, response.pomFiles || []);
       this.hideLoading();
 
-      const enhancementText = this.settings.enableAI ? 'AI-enhanced ' : '';
+      const enhancementText = (this.settings.enableAI && aiActuallyUsed) ? 'AI-enhanced ' : '';
       this.showToast(`${enhancementText}Script generated!`, 'success');
 
     } catch (error) {
@@ -1116,8 +1157,15 @@ class FlowScribeUI {
     }
   }
 
-  displayScript(script) {
+  displayScript(script, showAIFallback = false, pomFiles = []) {
     this.generatedScriptContent = script;
+    this.pomFilesData = pomFiles;
+    if (this.aiFallbackNotice) {
+      this.aiFallbackNotice.style.display = showAIFallback ? 'flex' : 'none';
+    }
+    if (this.downloadPOMBtn) {
+      this.downloadPOMBtn.style.display = pomFiles.length > 0 ? 'inline-flex' : 'none';
+    }
     const language = this.getLanguageForFramework(this.selectedFramework);
 
     this.scriptContent.textContent = script;
@@ -1128,7 +1176,91 @@ class FlowScribeUI {
       Prism.highlightElement(this.scriptContent);
     }
 
+    // Run validation and render results
+    const enabledActions = this.getEnabledActions();
+    const validation = this.validateScript(script, this.selectedFramework, enabledActions);
+    this.renderValidationResults(validation);
+
     this.scriptModal.style.display = 'flex';
+  }
+
+  validateScript(script, framework, actions) {
+    const checks = [];
+
+    // Check 1: Framework keywords
+    const keywordMap = {
+      playwright: { imports: [/@playwright\/test/, /require.*playwright/], actions: [/page\.goto\(/, /page\.locator\(/, /page\.getBy/, /\.click\(/, /\.fill\(/] },
+      cypress: { imports: [/describe\(/, /it\(/], actions: [/cy\.visit\(/, /cy\.get\(/] },
+      selenium: { imports: [/from selenium import/, /import org\.openqa\.selenium/, /require.*selenium/], actions: [/driver\.get\(/, /find_element/, /findElement/] },
+      puppeteer: { imports: [/require.*puppeteer/, /puppeteer\.launch/], actions: [/page\.goto\(/, /page\.click\(/, /page\.type\(/] }
+    };
+    const kw = keywordMap[framework] || keywordMap.playwright;
+    const hasImport = kw.imports.some(r => r.test(script));
+    const hasAction = kw.actions.some(r => r.test(script));
+    checks.push({
+      name: 'Framework keywords',
+      status: hasImport && hasAction ? 'pass' : (hasImport || hasAction ? 'warn' : 'fail'),
+      label: hasImport && hasAction ? 'Framework keywords verified' : (hasImport || hasAction ? 'Partial framework match' : 'Missing framework keywords')
+    });
+
+    // Check 2: Completeness (setup / body / teardown)
+    const structureMap = {
+      playwright: { setup: [/import.*@playwright/, /test\(/], body: [/await\s+page\./, /\.click\(/, /\.fill\(/], teardown: [/\}\);?\s*$/] },
+      cypress: { setup: [/describe\(/, /it\(/], body: [/cy\.visit\(/, /cy\.get\(/], teardown: [/\}\);?\s*\}\);?\s*$/] },
+      selenium: { setup: [/webdriver\.Chrome\(/, /from selenium/], body: [/driver\.get\(/, /find_element/], teardown: [/driver\.quit\(\)/] },
+      puppeteer: { setup: [/puppeteer\.launch/, /browser\.newPage/], body: [/page\.goto\(/, /page\.click\(/], teardown: [/browser\.close\(\)/] }
+    };
+    const st = structureMap[framework] || structureMap.playwright;
+    const hasSetup = st.setup.some(r => r.test(script));
+    const hasBody = st.body.some(r => r.test(script));
+    const hasTeardown = st.teardown.some(r => r.test(script));
+    const structScore = [hasSetup, hasBody, hasTeardown].filter(Boolean).length;
+    checks.push({
+      name: 'Completeness',
+      status: structScore === 3 ? 'pass' : (structScore >= 2 ? 'warn' : 'fail'),
+      label: structScore === 3 ? 'Setup, body, and teardown present' : (hasBody ? 'Incomplete structure (review setup/teardown)' : 'Missing test body')
+    });
+
+    // Check 3: Action coverage — pass/fail based on whether any steps exist, not yield %
+    // Yield % is misleading for large recordings (recorder captures every keystroke, hover, focus)
+    const stepPatterns = {
+      playwright: /await\s+(?:page|expect|frame)\.\w+\(/g,
+      cypress: /cy\.\w+\(/g,
+      selenium: /(?:driver\.\w+\(|wait\.until|element\.\w+\()/g,
+      puppeteer: /await\s+page\.\w+\(/g
+    };
+    const scriptLines = script.split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('#'));
+    const stepCount = scriptLines.join('\n').match(stepPatterns[framework] || stepPatterns.playwright)?.length || 0;
+    const totalRecorded = actions.length;
+    checks.push({
+      name: 'Action coverage',
+      status: stepCount > 0 ? 'pass' : 'fail',
+      label: stepCount > 0
+        ? `${stepCount} test steps generated from ${totalRecorded} recorded events`
+        : 'No test steps generated — check framework selection'
+    });
+
+    const overall = checks.some(c => c.status === 'fail') ? 'fail' : (checks.some(c => c.status === 'warn') ? 'warn' : 'pass');
+    return { overall, checks };
+  }
+
+  renderValidationResults(validation) {
+    const container = document.getElementById('validationSummary');
+    if (!container) return;
+
+    const icons = {
+      pass: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>',
+      warn: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>',
+      fail: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>'
+    };
+
+    container.innerHTML = validation.checks.map(check =>
+      `<div class="validation-row validation-${check.status}">
+        <span class="validation-icon">${icons[check.status]}</span>
+        <span class="validation-label">${check.label}</span>
+      </div>`
+    ).join('');
+    container.style.display = 'flex';
   }
 
   getLanguageForFramework(framework) {
@@ -1156,51 +1288,6 @@ class FlowScribeUI {
     }
   }
 
-  async exportScript(exportType) {
-    try {
-      this.showLoading('Preparing export...');
-
-      if (exportType === 'script' && this.generatedScriptContent) {
-        const filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
-        this.downloadFile(this.generatedScriptContent, filename, 'text/plain');
-        this.hideLoading();
-        this.showToast('Script exported!', 'success');
-        this.toggleExportOptions();
-        return;
-      }
-
-      const response = await chrome.runtime.sendMessage({
-        type: 'GENERATE_SCRIPT',
-        data: {
-          framework: this.selectedFramework,
-          actions: this.actions,
-          assertions: this.assertions,
-          options: {
-            includePOM: exportType === 'pom' || exportType === 'full',
-            includeCICD: exportType === 'cicd' || exportType === 'full',
-            cicdPlatform: this.settings.cicdPlatform
-          }
-        }
-      });
-
-      if (!response.success) {
-        throw new Error(response.error || 'Failed to export');
-      }
-
-      const filename = `flowscribe-${this.selectedFramework}-script.${this.getFileExtension(this.selectedFramework)}`;
-      this.downloadFile(response.script, filename, 'text/plain');
-
-      this.hideLoading();
-      this.showToast(`${exportType} package exported!`, 'success');
-      this.toggleExportOptions();
-
-    } catch (error) {
-      this.hideLoading();
-      this.showToast(`Export failed: ${error.message}`, 'error');
-      Logger.error('Export failed:', error);
-    }
-  }
-
   downloadFile(content, filename, mimeType) {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -1213,19 +1300,36 @@ class FlowScribeUI {
     URL.revokeObjectURL(url);
   }
 
-  getFileExtension(framework) {
-    const extensions = {
-      playwright: 'js',
-      selenium: 'py',
-      cypress: 'js',
-      puppeteer: 'js'
-    };
-    return extensions[framework] || 'txt';
+  downloadScript() {
+    if (!this.generatedScriptContent) {
+      this.showToast('No script to download', 'error');
+      return;
+    }
+    const ext = this.getFileExtension(this.selectedFramework);
+    const filename = `flowscribe-test-${this.selectedFramework}.${ext}`;
+    this.downloadFile(this.generatedScriptContent, filename, 'text/plain');
+    this.showToast('Script downloaded!', 'success');
   }
 
-  toggleExportOptions() {
-    const isVisible = this.exportOptions.style.display !== 'none';
-    this.exportOptions.style.display = isVisible ? 'none' : 'flex';
+  downloadPOMFiles() {
+    if (!this.pomFilesData || this.pomFilesData.length === 0) {
+      this.showToast('No POM files to download', 'error');
+      return;
+    }
+    for (const { filename, code } of this.pomFilesData) {
+      this.downloadFile(code, filename, 'text/plain');
+    }
+    this.showToast(`Downloaded ${this.pomFilesData.length} POM file(s)!`, 'success');
+  }
+
+  getFileExtension(framework) {
+    const extensions = {
+      playwright: 'spec.js',
+      selenium: 'test.py',
+      cypress: 'cy.js',
+      puppeteer: 'test.js'
+    };
+    return extensions[framework] || 'js';
   }
 
   async confirmAIUsage() {
@@ -1250,7 +1354,6 @@ class FlowScribeUI {
 
   closeScriptModal() {
     this.scriptModal.style.display = 'none';
-    this.exportOptions.style.display = 'none';
   }
 
   toggleAIConfig() {
@@ -1308,7 +1411,7 @@ class FlowScribeUI {
         enableSelfHealing: this.enableSelfHealing.checked,
         enableNetworkRecording: this.enableNetworkRecording.checked,
         enablePOMGeneration: this.enablePOMGeneration.checked,
-        cicdPlatform: this.cicdPlatform.value
+        includeScreenshots: this.includeScreenshots?.checked || false
       };
 
       const response = await chrome.runtime.sendMessage({
@@ -1406,6 +1509,14 @@ class FlowScribeUI {
   }
 
   // ===== Actions List Management =====
+  getEnabledActions() {
+    return this.actions.filter((action, index) => {
+      if (this.disabledActionIds.has(index)) return false;
+      if (this.hiddenActionTypes.has(action.type)) return false;
+      return true;
+    });
+  }
+
   updateActionsList() {
     if (this.actions.length > 0) {
       this.actionsPanel.style.display = 'block';
@@ -1413,24 +1524,81 @@ class FlowScribeUI {
       this.actionsList.style.display = 'block';
     } else {
       this.actionsPanel.style.display = 'none';
+      this.actionsFilterBar.style.display = 'none';
       return;
     }
 
-    this.actionListCount.textContent = this.actions.length;
+    const enabledCount = this.getEnabledActions().length;
+    const totalCount = this.actions.length;
+    this.actionListCount.textContent = enabledCount < totalCount
+      ? `${enabledCount}/${totalCount}`
+      : `${totalCount}`;
+
+    this.renderFilterBar();
     this.renderActionItems();
+  }
+
+  renderFilterBar() {
+    if (this.actions.length === 0) {
+      this.actionsFilterBar.style.display = 'none';
+      return;
+    }
+
+    const typeCounts = {};
+    this.actions.forEach(a => {
+      typeCounts[a.type] = (typeCounts[a.type] || 0) + 1;
+    });
+
+    this.actionsFilterBar.style.display = 'flex';
+    this.actionsFilterBar.innerHTML = '';
+
+    Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([type, count]) => {
+        const chip = document.createElement('span');
+        const isHidden = this.hiddenActionTypes.has(type);
+        chip.className = `filter-chip${isHidden ? ' hidden' : ' active'}`;
+        chip.innerHTML = `${type} <span class="filter-chip-count">${count}</span>`;
+        chip.addEventListener('click', () => {
+          if (this.hiddenActionTypes.has(type)) {
+            this.hiddenActionTypes.delete(type);
+          } else {
+            this.hiddenActionTypes.add(type);
+          }
+          this.updateActionsList();
+        });
+        this.actionsFilterBar.appendChild(chip);
+      });
   }
 
   renderActionItems() {
     this.actionsList.innerHTML = '';
+    let groupNumber = 1;
 
     this.actions.forEach((action, index) => {
+      // Insert group separator on timing gaps > 2s
+      if (index > 0 && action.timeSinceLastAction > 2000) {
+        groupNumber++;
+        const sep = document.createElement('li');
+        sep.className = 'action-group-separator';
+        const pauseText = (action.timeSinceLastAction / 1000).toFixed(1) + 's pause';
+        sep.innerHTML = `<span class="group-label">Group ${groupNumber}</span><span class="group-gap">${pauseText}</span>`;
+        this.actionsList.appendChild(sep);
+      }
+
       const li = document.createElement('li');
-      li.className = 'action-item';
+      const isDisabled = this.disabledActionIds.has(index);
+      const isTypeHidden = this.hiddenActionTypes.has(action.type);
+      li.className = `action-item${isDisabled ? ' action-disabled' : ''}${isTypeHidden ? ' type-hidden' : ''}`;
       li.setAttribute('data-index', index);
 
       const description = this.getActionDescription(action);
 
       li.innerHTML = `
+        <label class="action-checkbox-label">
+          <input type="checkbox" class="action-checkbox" data-index="${index}" ${isDisabled ? '' : 'checked'}>
+          <span class="action-checkmark"></span>
+        </label>
         <span class="action-number">${index + 1}</span>
         <span class="action-type-badge">${action.type}</span>
         <span class="action-description">${description}</span>
@@ -1441,6 +1609,21 @@ class FlowScribeUI {
           </svg>
         </button>
       `;
+
+      li.querySelector('.action-checkbox').addEventListener('change', (e) => {
+        const idx = parseInt(e.target.dataset.index);
+        if (e.target.checked) {
+          this.disabledActionIds.delete(idx);
+          li.classList.remove('action-disabled');
+        } else {
+          this.disabledActionIds.add(idx);
+          li.classList.add('action-disabled');
+        }
+        const enabledCount = this.getEnabledActions().length;
+        const totalCount = this.actions.length;
+        this.actionListCount.textContent = enabledCount < totalCount
+          ? `${enabledCount}/${totalCount}` : `${totalCount}`;
+      });
 
       li.querySelector('.delete-action').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1488,6 +1671,8 @@ class FlowScribeUI {
     if (!confirm('Clear all recorded actions?')) return;
 
     this.actions = [];
+    this.disabledActionIds.clear();
+    this.hiddenActionTypes.clear();
     chrome.runtime.sendMessage({ type: 'CLEAR_ACTIONS' });
     this.updateUI();
     this.showToast('All actions cleared', 'success');

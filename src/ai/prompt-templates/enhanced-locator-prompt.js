@@ -34,24 +34,21 @@ class EnhancedLocatorPromptGenerator {
    * Generate comprehensive AI prompt for script enhancement
    */
   generateEnhancedPrompt(actions, framework, options = {}) {
-    // TEMPORARILY DISABLED: Use original actions without optimization
-    // const optimizedActions = this.optimizeActionSequence(actions);
     const originalActions = actions || [];
-    const pageAnalysis = this.analyzePageStructure(originalActions);
-    const userJourney = this.extractUserJourney(originalActions);
-    const elementContext = this.extractElementContext(originalActions);
-    
-    console.log('🎯 AI Prompt Generator - Using all actions without filtering:', originalActions.length);
+    const optimizedActions = this.optimizeActionSequence(originalActions);
+    const pageAnalysis = this.analyzePageStructure(optimizedActions);
+    const userJourney = this.extractUserJourney(optimizedActions);
+    const elementContext = this.extractElementContext(optimizedActions);
     
     return {
       systemPrompt: this.buildAdvancedSystemPrompt(framework, options),
-      userPrompt: this.buildAdvancedUserPrompt(originalActions, framework, pageAnalysis, userJourney, elementContext, options),
+      userPrompt: this.buildAdvancedUserPrompt(optimizedActions, framework, pageAnalysis, userJourney, elementContext, options),
       contextData: {
         pageAnalysis,
         userJourney,
         elementContext,
-        totalActions: originalActions.length,
-        originalActionCount: actions.length,
+        totalActions: optimizedActions.length,
+        originalActionCount: originalActions.length,
         uniquePages: [...new Set(originalActions.map(a => a.url))].length,
         frameworkCapabilities: this.getFrameworkCapabilities(framework)
       }
@@ -59,7 +56,10 @@ class EnhancedLocatorPromptGenerator {
   }
 
   /**
-   * Optimize action sequence to remove redundant navigations and focus on meaningful interactions
+   * Remove redundant navigations, rapid duplicates, and noise events from the
+   * recorded action sequence, keeping only user-meaningful interactions.
+   * @param {Array<{ type: string, url?: string, timestamp?: number, isUserInitiated?: boolean, element?: object }>} actions - Raw recorded actions
+   * @returns {Array<object>} Filtered and optimized action list
    */
   optimizeActionSequence(actions) {
     const optimizedActions = [];
@@ -105,6 +105,13 @@ class EnhancedLocatorPromptGenerator {
     return optimizedActions;
   }
 
+  /**
+   * Determine whether a URL transition represents a meaningful page change
+   * (different domain or path), ignoring query-param-only and hash changes.
+   * @param {string} newUrl - The new URL navigated to
+   * @param {string} lastUrl - The previous URL
+   * @returns {boolean} True if the navigation is significant
+   */
   isSignificantPageChange(newUrl, lastUrl) {
     if (!lastUrl) return true;
     
@@ -143,6 +150,14 @@ class EnhancedLocatorPromptGenerator {
     }
   }
 
+  /**
+   * Check if an action is a rapid duplicate of the immediately preceding action
+   * (same type, same element, within 500ms).
+   * @param {{ type: string, timestamp?: number, element?: { cssSelector?: string } }} action - Current action
+   * @param {{ type: string, element?: { cssSelector?: string } } | undefined} lastAction - Previous action
+   * @param {number} lastTime - Timestamp of the previous action
+   * @returns {boolean} True if this action should be discarded as a duplicate
+   */
   isDuplicateAction(action, lastAction, lastTime) {
     if (!lastAction) return false;
     
@@ -156,6 +171,12 @@ class EnhancedLocatorPromptGenerator {
     return false;
   }
 
+  /**
+   * Determine whether an action type represents a user-meaningful interaction
+   * (click, input, change, submit, select, navigate) vs. noise (mouseover, blur, etc.).
+   * @param {{ type: string }} action - Recorded action
+   * @returns {boolean} True if the action should be kept in the optimized sequence
+   */
   isMeaningfulAction(action) {
     const meaningfulTypes = ['click', 'input', 'change', 'submit', 'select', 'navigate'];
     
@@ -171,121 +192,43 @@ class EnhancedLocatorPromptGenerator {
    * Build advanced system prompt with locator intelligence
    */
   buildAdvancedSystemPrompt(framework, options) {
-    return `You are an expert test automation architect specializing in ${framework} with deep expertise in:
-1. INTELLIGENT LOCATOR GENERATION - Create the most stable, maintainable selectors
-2. COMPREHENSIVE TEST COVERAGE - Ensure no user journey step is missed
-3. ROBUST ASSERTION STRATEGIES - Validate every critical aspect of the application
+    return `You are an expert ${framework} test automation engineer. Generate production-ready test scripts.
 
-CRITICAL REQUIREMENTS:
+APPROACH:
+- Infer the high-level user intent and journey goal from the recorded actions. Generate a test that validates the workflow outcome, not just replays clicks.
+- Structure: setup/config → navigation → interaction → validation → cleanup.
 
-🎯 FOCUS ON MEANINGFUL INTERACTIONS:
-- PRIORITIZE actual user interactions (clicks, form fills, submissions) over navigation events
-- MINIMIZE redundant page.goto() calls - use only for initial navigation or significant page changes
-- AVOID generating separate steps for SPA route changes or automatic redirects
-- FOCUS on user-initiated actions that add test value
+RULES:
+- Output ONLY valid, executable ${framework} code. No markdown fences, no explanations.
+- Convert EVERY recorded action into test code. Do not skip actions.
+- Locator priority: data-testid > ID > aria-label > name > role+text > placeholder > CSS.
+- Avoid brittle selectors: no nth-child, no dynamic classes (e.g. "btn-xyz123", "css-1a2b3c"), no absolute XPath positions.
+- Add assertions: element visibility before interaction, value verification after fill, URL check after navigation, success indicator after form submit.
+- Use framework auto-waiting. Never use hardcoded sleep/waitForTimeout/time.sleep.
+- Handle dynamic UI: wait for SPA route transitions, async-rendered content, and animations to settle before asserting.
+- Mask sensitive data: replace passwords with "{{PASSWORD}}", API keys with "{{API_KEY}}", tokens with "{{TOKEN}}".
+- Include test.describe wrapper, beforeEach setup, and proper teardown.
 
-🎯 LOCATOR GENERATION EXCELLENCE:
-- ANALYZE the actual DOM structure provided, don't assume element attributes
-- PRIORITIZE stability over brevity: data-testid > unique ID > aria-label > semantic combo > text content
-- GENERATE multiple fallback strategies for each element
-- AVOID brittle selectors like nth-child, absolute positions, or dynamic classes
-- CREATE smart XPath expressions that adapt to DOM changes
-- USE relative positioning from the most stable parent elements
-- COMBINE multiple attributes for uniqueness when single attributes aren't sufficient
-
-🛡️ ASSERTION COMPLETENESS:
-- VALIDATE element presence before interaction
-- VERIFY text content matches expected values
-- CHECK form validation states and error messages
-- ASSERT URL patterns and navigation success
-- VALIDATE dynamic content loading and API responses
-- ENSURE accessibility attributes are present and correct
-- MONITOR page performance and loading states
-- VERIFY user feedback (success messages, error states)
-
-🔄 JOURNEY COMPLETENESS:
-- CAPTURE every step of the user's recorded journey
-- ADD meaningful waits for dynamic content
-- HANDLE form submissions and their results
-- VERIFY each page transition and state change
-- INCLUDE error handling for network failures
-- TEST both positive and negative scenarios when possible
-
-🎨 ${framework.toUpperCase()} BEST PRACTICES:
+${framework.toUpperCase()} GUIDELINES:
 ${this.getFrameworkSpecificGuidelines(framework)}
 
-📚 FEW-SHOT EXAMPLES (Learn from these):
+LOCATOR EXAMPLES:
 
-Example 1 - Button with test ID (BEST):
-Input HTML: <button data-testid="login-btn" class="btn-primary-xyz123">Login</button>
-✅ GOOD: await page.getByTestId('login-btn').click();
-❌ BAD: await page.click('.btn-primary-xyz123');
-Reasoning: data-testid is stable and designed for testing. Avoid auto-generated class names.
+<button data-testid="login-btn" class="btn-xyz123">Login</button>
+GOOD: page.getByTestId('login-btn').click()
+BAD: page.click('.btn-xyz123')
 
-Example 2 - Form input with label (SEMANTIC):
-Input HTML: <input id="email" name="email" type="email" aria-label="Email address" placeholder="Enter email">
-✅ GOOD: await page.getByLabel('Email address').fill('user@example.com');
-✅ ALSO GOOD: await page.locator('[name="email"]').fill('user@example.com');
-❌ BAD: await page.locator('#email').fill('user@example.com'); // Less semantic
-Reasoning: aria-label is most semantic. Use name attribute as fallback for form fields.
+<input name="email" aria-label="Email address" placeholder="Enter email">
+GOOD: page.getByLabel('Email address').fill('user@example.com')
+ALSO: page.locator('[name="email"]').fill('user@example.com')
 
-Example 3 - Link with text (TEXT-BASED):
-Input HTML: <a href="/dashboard" class="nav-link-abc123">Go to Dashboard</a>
-✅ GOOD: await page.getByRole('link', { name: 'Go to Dashboard' }).click();
-✅ ALSO GOOD: await page.getByText('Go to Dashboard', { exact: true }).click();
-❌ BAD: await page.click('.nav-link-abc123');
-Reasoning: Text content is stable for navigation. Role-based locators are most semantic.
+<a href="/dashboard" class="nav-abc">Go to Dashboard</a>
+GOOD: page.getByRole('link', { name: 'Go to Dashboard' }).click()
+BAD: page.click('.nav-abc')
 
-Example 4 - Dynamic element (FALLBACK STRATEGY):
-Input HTML: <div class="modal-content-xyz" data-modal-id="confirm-123">
-  <button id="confirm-btn" role="button" aria-label="Confirm action">Confirm</button>
-</div>
-✅ GOOD: await page.getByRole('button', { name: 'Confirm action' }).click();
-✅ FALLBACK: await page.locator('#confirm-btn').click();
-✅ LAST RESORT: await page.locator('[data-modal-id="confirm-123"] button').click();
-❌ BAD: await page.click('.modal-content-xyz button');
-Reasoning: Multiple strategies with priority: role > id > parent context > class
-
-Example 5 - Chain-of-Thought for Complex Selector:
-Input HTML: <form id="signup-form">
-  <input name="username" placeholder="Username" />
-  <input name="password" type="password" placeholder="Password" />
-  <button type="submit">Sign Up</button>
-</form>
-THINKING PROCESS:
-1. Check for data-testid → None found
-2. Check for aria-label → None found
-3. Check for unique name → "username" is semantic
-4. Consider form context → Can scope to form
-5. Text content for button → "Sign Up" is unique
-CODE:
-await page.locator('form#signup-form [name="username"]').fill('testuser');
-await page.locator('form#signup-form [name="password"]').fill('password123');
-await page.getByRole('button', { name: 'Sign Up' }).click();
-Reasoning: Combine form context + name attributes for inputs, role for button.
-
-Example 6 - Negative Scenario Handling:
-Input HTML: <button id="submit-btn" disabled aria-disabled="true">Submit</button>
-✅ GOOD:
-await page.getByRole('button', { name: 'Submit' }).waitFor({ state: 'visible' });
-await expect(page.getByRole('button', { name: 'Submit' })).toBeDisabled();
-// Wait for button to be enabled
-await page.getByRole('button', { name: 'Submit' }).waitFor({ state: 'enabled', timeout: 5000 });
-await page.getByRole('button', { name: 'Submit' }).click();
-Reasoning: Check element state before interaction. Handle disabled states explicitly.
-
-LOCATOR PRIORITY HIERARCHY:
-1. [data-testid] - Highest priority, purpose-built for testing
-2. #unique-id - Stable IDs with semantic meaning (avoid auto-generated)
-3. [aria-label] - Accessibility attributes with descriptive labels
-4. [name] - Form element names (for inputs, selects)
-5. [role] + semantic context - ARIA roles with surrounding context
-6. text() content - Exact text match with fallback to contains()
-7. Smart attribute combinations - Multiple attributes for uniqueness
-8. Relative positioning - From stable parent to child element
-9. Smart XPath - Multiple strategies with fallbacks
-
-RETURN: Only valid, executable ${framework} code with comprehensive comments explaining locator choices.`;
+<input type="password" name="password" placeholder="Password">
+GOOD: page.locator('[name="password"]').fill('{{PASSWORD}}')
+BAD: page.locator('[name="password"]').fill('actual_password_here')`;
   }
 
   /**
@@ -294,71 +237,38 @@ RETURN: Only valid, executable ${framework} code with comprehensive comments exp
   buildAdvancedUserPrompt(actions, framework, pageAnalysis, userJourney, elementContext, options) {
     const domStructure = this.buildDOMContextString(elementContext);
     
-    return `ENHANCE this ${framework} test script using the ACTUAL DOM STRUCTURE and RECORDED USER JOURNEY:
+    return `Generate a complete ${framework} test for this user journey. Use ONLY the DOM data provided below.
 
-==== RECORDED USER JOURNEY ====
+Test Name: "${options.testName || 'FlowScribe User Journey'}"
+Total actions: ${actions.length}
+Pages visited: ${[...new Set(actions.map(a => a.url).filter(Boolean))].length}
+URL patterns: ${this.extractURLPatterns(actions)}
+
+USER JOURNEY:
 ${this.formatUserJourney(userJourney)}
 
-==== PAGE ANALYSIS ====
+PAGE ANALYSIS:
 ${this.formatPageAnalysis(pageAnalysis)}
 
-==== ACTUAL DOM STRUCTURE ====
+DOM ELEMENTS:
 ${domStructure}
 
-==== CURRENT BASIC SCRIPT ====
-${this.generateBasicScript(actions, framework)}
-
-==== ENHANCEMENT REQUIREMENTS ====
-
-🎯 LOCATOR INTELLIGENCE:
-- Analyze the PROVIDED DOM structure (above) to generate the best selectors
-- Create multiple fallback strategies for each element
-- Explain your locator choice reasoning in comments
-- Avoid assumptions - use only elements that exist in the DOM data
-
-🛡️ COMPREHENSIVE ASSERTIONS:
-- Add element presence validation before each interaction
-- Verify text content where applicable: "${this.extractExpectedTexts(actions)}"
-- Check URL patterns for navigation: ${this.extractURLPatterns(actions)}
-- Validate form states and submissions
-- Assert loading states and dynamic content
-- Include accessibility checks for key interactions
-
-🎯 PAGE-LEVEL ASSERTIONS (On navigation/page load):
-- Assert on key page structure elements (headers, navigation, main content areas)
-- Validate presence of important buttons/links that define the page (even if not clicked)
-- Check for expected text content that confirms correct page load
-- Verify breadcrumbs, page titles, and navigation elements
-- Assert on random but important elements that should exist on each page type
-- Validate loading indicators are gone and page is fully rendered
-- Check for error messages or success indicators as appropriate
-
-🔄 COMPLETE JOURNEY COVERAGE:
-- Ensure EVERY recorded action is represented in the final script
-- Add appropriate waits for dynamic content
-- Handle page transitions and loading states
-- Include error handling and retry logic
-- Verify the complete user workflow end-to-end
-
-📊 TEST DATA & CONFIGURATION:
-- Test Name: "${options.testName || 'FlowScribe Complete User Journey'}"
-- Environment: ${options.environment || 'staging'}
-- Include Screenshots: ${options.includeScreenshots !== false}
-- Network Validation: ${options.includeNetworkAssertions || false}
-- Accessibility Checks: ${options.includeA11yChecks || false}
-
-GENERATE: A complete, production-ready ${framework} test script that:
-1. Uses the BEST possible locators based on the actual DOM provided
-2. Includes comprehensive assertions for the complete user journey
-3. Handles all edge cases and potential failures
-4. Follows ${framework} best practices and patterns
-5. Is maintainable and self-documenting with clear comments
-
-Remember: Use ONLY the DOM elements and attributes provided above - do not assume or guess element properties!`;
+REQUIREMENTS:
+- Convert ALL ${actions.length} actions into test steps
+- Use the best locator from each element's DOM data (prefer testid > id > aria-label > name > role)
+- Add visibility assertion before each interaction
+- Add value assertion after fill operations
+- Add URL assertion after navigation
+- After page loads, verify page title or key heading is present
+- Use framework auto-waiting, never hardcoded waits
+- Wrap in test.describe with beforeEach setup`;
   }
 
   /**
-   * Analyze page structure from recorded actions
+   * Group actions by URL and analyze the page structure for each unique page:
+   * element types, form interactions, modal presence, and interaction timeline.
+   * @param {Array<{ url?: string, title?: string, element?: object, type: string, timestamp?: number, formContext?: { id?: string } }>} actions - Recorded actions
+   * @returns {Array<{ url: string, title: string, elements: Array<object>, interactions: Array<object>, forms: Set<string>, modals: boolean, navigation: Array<any> }>} Per-page analysis
    */
   analyzePageStructure(actions) {
     const pages = new Map();
@@ -423,7 +333,10 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
   }
 
   /**
-   * Extract user journey narrative
+   * Build a numbered step-by-step user journey from recorded actions,
+   * tracking page navigations and individual interactions.
+   * @param {Array<{ url?: string, type: string, timestamp?: number, element?: object }>} actions - Recorded actions
+   * @returns {Array<{ step: number, type: string, description: string, url?: string, timestamp?: number }>} Ordered journey steps
    */
   extractUserJourney(actions) {
     const journey = [];
@@ -513,7 +426,10 @@ Remember: Use ONLY the DOM elements and attributes provided above - do not assum
   }
 
   /**
-   * Generate multiple locator strategies for an element
+   * Generate an array of locator strategies for an element, ranked by priority
+   * and stability score, covering data-testid, id, aria-label, name, text, and CSS fallbacks.
+   * @param {{ id?: string, attributes?: Record<string, string>, name?: string, tagName: string, textContent?: string, className?: string, cssSelector?: string }} element - Recorded element data
+   * @returns {Array<{ type: string, selector: string, priority: number, stability: number }>} Ranked locator strategies
    */
   generateLocatorStrategies(element) {
     const strategies = [];
@@ -820,9 +736,17 @@ Page: ${page.url}
    * Generate basic script for reference
    */
   generateBasicScript(actions, framework) {
-    // This would call the existing template generation
-    return `// Basic ${framework} script with ${actions.length} actions
-// This is the current template that needs enhancement`;
+    const steps = actions.slice(0, 20).map((action, i) => {
+      const el = action.element;
+      const selector = el?.id ? `#${el.id}` : (el?.name ? `[name="${el.name}"]` : (el?.cssSelector || el?.tagName?.toLowerCase() || 'unknown'));
+      switch (action.type) {
+        case 'click': return `// Step ${i + 1}: Click ${el?.tagName || 'element'}\nawait page.locator('${selector}').click();`;
+        case 'input': return `// Step ${i + 1}: Fill ${el?.tagName || 'input'}\nawait page.locator('${selector}').fill('${(action.value || '').substring(0, 50)}');`;
+        case 'navigation': return `// Step ${i + 1}: Navigate\nawait page.goto('${action.url || ''}');`;
+        default: return `// Step ${i + 1}: ${action.type} on ${el?.tagName || 'element'}`;
+      }
+    });
+    return `// Basic ${framework} script with ${actions.length} actions\n${steps.join('\n')}`;
   }
 
   /**
@@ -859,4 +783,5 @@ Page: ${page.url}
   }
 }
 
-module.exports = EnhancedLocatorPromptGenerator;
+// ESM export for webpack/service worker
+export { EnhancedLocatorPromptGenerator };

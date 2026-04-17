@@ -242,7 +242,11 @@ class NetworkRecorder {
   }
 
   /**
-   * Determine if request should be captured
+   * Determine if a network request should be captured based on the configured
+   * inclusion and exclusion filters for resource types and URL patterns.
+   * Excludes stylesheets, fonts, images, media, analytics, and extension URLs.
+   * @param {{ type: string, url: string }} details - The webRequest event details object
+   * @returns {boolean} True if the request passes all filters and should be recorded
    */
   shouldCaptureRequest(details) {
     // Skip excluded resource types
@@ -351,7 +355,10 @@ class NetworkRecorder {
   }
 
   /**
-   * Generate network summary
+   * Generate a summary of all captured network requests, including counts
+   * by type and status code, average response time, error count, and
+   * a filtered list of identified API requests.
+   * @returns {{ totalRequests: number, requestsByType: Object<string, number>, requestsByStatus: Object<string|number, number>, averageResponseTime: number, totalDataTransferred: number, errorCount: number, apiRequests: Array<{ url: string, method: string, statusCode: number, duration: number }> }} Network recording summary object
    */
   generateNetworkSummary() {
     const summary = {
@@ -404,7 +411,10 @@ class NetworkRecorder {
   }
 
   /**
-   * Determine if request is an API call
+   * Determine if a network request is an API call based on its resource type
+   * (xmlhttprequest, fetch) or URL patterns (/api/, /rest/, /graphql, /v1/, /v2/, .json).
+   * @param {{ type: string, url: string }} request - The network request object to evaluate
+   * @returns {boolean} True if the request appears to be an API call
    */
   isApiRequest(request) {
     const apiIndicators = [
@@ -444,7 +454,10 @@ class NetworkRecorder {
   }
 
   /**
-   * Generate test assertions for network requests
+   * Generate framework-specific test assertion code strings for all captured
+   * API requests. Supports Playwright, Cypress, and Selenium output formats.
+   * @param {string} [framework='playwright'] - The test framework to generate assertions for ('playwright' | 'cypress' | 'selenium')
+   * @returns {Array<string>} Array of assertion code strings, one per captured API request
    */
   generateNetworkAssertions(framework = 'playwright') {
     const apiRequests = this.getApiRequests();
@@ -493,6 +506,12 @@ class NetworkRecorder {
 # Consider using browser logs or proxy tools for API testing`;
   }
 
+  /**
+   * Extract the pathname portion from a full URL string.
+   * Falls back to returning the original URL if parsing fails.
+   * @param {string} url - The full URL to extract the path from
+   * @returns {string} The pathname portion of the URL (e.g., "/api/v1/users")
+   */
   extractPathFromUrl(url) {
     try {
       return new URL(url).pathname;
@@ -606,7 +625,11 @@ class NetworkRecorder {
   // ===== GraphQL Detection =====
 
   /**
-   * Detect if a request is a GraphQL request
+   * Detect if a network request is a GraphQL request by checking the URL
+   * for a /graphql path, the Content-Type header for application/graphql,
+   * or the POST body for query/mutation/operationName fields.
+   * @param {{ url?: string, method?: string, requestHeaders?: Object, requestBody?: string | Object } | null} request - The network request object to evaluate
+   * @returns {boolean} True if the request is identified as a GraphQL request
    */
   isGraphQLRequest(request) {
     if (!request) return false;
@@ -973,6 +996,9 @@ await page.evaluateOnNewDocument(() => {
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = NetworkRecorder;
-} else {
+} else if (typeof window !== 'undefined') {
   window.NetworkRecorder = NetworkRecorder;
 }
+
+// ESM export for webpack/service worker
+export { NetworkRecorder };
