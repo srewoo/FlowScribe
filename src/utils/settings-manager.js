@@ -12,9 +12,7 @@ class SettingsManager {
       includeAssertions: true, 
       addComments: true, 
       theme: 'light',
-      enableSelfHealing: true, 
-      enableNetworkRecording: true,
-      selfHealingConfidence: 0.7
+      enableNetworkRecording: true
     };
   }
 

@@ -4,6 +4,32 @@
  * Integrates with test generation for API testing
  */
 
+// Gate verbose logging in production builds; errors always surface.
+const DEBUG_MODE = false;
+
+// Header names whose values must never be stored or exported (auth/session secrets).
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'authentication',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+  'x-auth-token',
+  'x-csrf-token',
+  'x-xsrf-token'
+]);
+
+// Fallback pattern for less common secret-bearing header names.
+const SENSITIVE_HEADER_PATTERN = /token|secret|password|session|apikey|api-key/i;
+
+const REDACTED = '***REDACTED***';
+
+function isSensitiveHeader(name) {
+  const lower = String(name).toLowerCase();
+  return SENSITIVE_HEADERS.has(lower) || SENSITIVE_HEADER_PATTERN.test(lower);
+}
+
 class NetworkRecorder {
   constructor() {
     this.isRecording = false;
@@ -35,12 +61,12 @@ class NetworkRecorder {
    */
   async init() {
     if (!chrome.webRequest) {
-      console.warn('Network recording requires webRequest permission');
+      if (DEBUG_MODE) console.warn('Network recording requires webRequest permission');
       return false;
     }
 
     await this.setupNetworkListeners();
-    console.log('📡 Network recorder initialized');
+    if (DEBUG_MODE) console.log('📡 Network recorder initialized');
     return true;
   }
 
@@ -52,7 +78,7 @@ class NetworkRecorder {
     this.networkRequests = [];
     this.requestMap.clear();
     
-    console.log('🔴 Network recording started');
+    if (DEBUG_MODE) console.log('🔴 Network recording started');
     
     // Clear any existing listeners to avoid duplicates
     await this.removeNetworkListeners();
@@ -66,7 +92,7 @@ class NetworkRecorder {
    */
   async stopRecording() {
     this.isRecording = false;
-    console.log(`🔴 Network recording stopped. Captured ${this.networkRequests.length} requests`);
+    if (DEBUG_MODE) console.log(`🔴 Network recording stopped. Captured ${this.networkRequests.length} requests`);
     
     return {
       requests: this.networkRequests,
@@ -315,7 +341,10 @@ class NetworkRecorder {
 
     const headerObj = {};
     headers.forEach(header => {
-      headerObj[header.name.toLowerCase()] = header.value;
+      const name = header.name.toLowerCase();
+      // Redact auth/session secrets at capture time so they never reach
+      // stored requests, JSON exports, or HAR output.
+      headerObj[name] = isSensitiveHeader(name) ? REDACTED : header.value;
     });
 
     return headerObj;
@@ -350,7 +379,7 @@ class NetworkRecorder {
       request.responseBodyCaptured = false;
       request.responseBodyNote = 'Response body capture requires DevTools API';
     } catch (error) {
-      console.warn('Failed to capture response body:', error);
+      if (DEBUG_MODE) console.warn('Failed to capture response body:', error);
     }
   }
 
@@ -696,7 +725,7 @@ class NetworkRecorder {
         }
       }
     } catch (e) {
-      console.warn('Failed to parse GraphQL operation:', e);
+      if (DEBUG_MODE) console.warn('Failed to parse GraphQL operation:', e);
     }
 
     return operation;
@@ -939,7 +968,7 @@ await page.evaluateOnNewDocument(() => {
    */
   async enableWebSocketDebugging(tabId) {
     if (!chrome.debugger) {
-      console.warn('WebSocket debugging requires debugger permission');
+      if (DEBUG_MODE) console.warn('WebSocket debugging requires debugger permission');
       return false;
     }
 
@@ -956,21 +985,21 @@ await page.evaluateOnNewDocument(() => {
 
         switch (method) {
           case 'Network.webSocketCreated':
-            console.log('WebSocket created:', params);
+            if (DEBUG_MODE) console.log('WebSocket created:', params);
             break;
           case 'Network.webSocketFrameSent':
-            console.log('WebSocket frame sent:', params);
+            if (DEBUG_MODE) console.log('WebSocket frame sent:', params);
             break;
           case 'Network.webSocketFrameReceived':
-            console.log('WebSocket frame received:', params);
+            if (DEBUG_MODE) console.log('WebSocket frame received:', params);
             break;
           case 'Network.webSocketClosed':
-            console.log('WebSocket closed:', params);
+            if (DEBUG_MODE) console.log('WebSocket closed:', params);
             break;
         }
       });
 
-      console.log('✅ WebSocket debugging enabled for tab:', tabId);
+      if (DEBUG_MODE) console.log('✅ WebSocket debugging enabled for tab:', tabId);
       return true;
     } catch (error) {
       console.error('Failed to enable WebSocket debugging:', error);
@@ -986,7 +1015,7 @@ await page.evaluateOnNewDocument(() => {
 
     try {
       await chrome.debugger.detach({ tabId });
-      console.log('WebSocket debugging disabled for tab:', tabId);
+      if (DEBUG_MODE) console.log('WebSocket debugging disabled for tab:', tabId);
     } catch (error) {
       console.error('Failed to disable WebSocket debugging:', error);
     }
@@ -996,6 +1025,7 @@ await page.evaluateOnNewDocument(() => {
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = NetworkRecorder;
+  module.exports.NetworkRecorder = NetworkRecorder; // keep named import working under CJS/jest
 } else if (typeof window !== 'undefined') {
   window.NetworkRecorder = NetworkRecorder;
 }

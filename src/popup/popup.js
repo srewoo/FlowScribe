@@ -7,8 +7,19 @@ const Logger = {
   debug: (...args) => DEBUG_MODE && console.debug("[FlowScribe]", ...args)
 };
 
+// Escape recorded/page-derived strings before they touch innerHTML (XSS prevention).
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 /**
- * FlowScribe Unified UI Controller v2.1
+ * FlowScribe Unified UI Controller v5.0
  * Complete implementation with tabs, assertions, history, and all UI features
  */
 class FlowScribeUI {
@@ -28,6 +39,7 @@ class FlowScribeUI {
     this.selectedAssertionType = 'visible';
     this.disabledActionIds = new Set();
     this.hiddenActionTypes = new Set();
+    this._nextActionId = 1;
 
     // Model options for different providers
     this.modelOptions = {
@@ -37,7 +49,7 @@ class FlowScribeUI {
         { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano (Fastest)' }
       ],
       anthropic: [
-        { value: 'claude-sonnet-4-5-20250514', label: 'Claude Sonnet 4.5 (Latest)' },
+        { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5 (Latest)' },
         { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (Fast)' }
       ],
       google: [
@@ -57,6 +69,7 @@ class FlowScribeUI {
     this.bindElements();
     this.setupEventListeners();
     this.setupPanelMode();
+    await this.loadTheme();
     await this.loadSettings();
     await this.loadCurrentState();
     await this.loadHistory();
@@ -126,10 +139,11 @@ class FlowScribeUI {
     const browserBadge = document.getElementById('browserBadge');
     if (!browserBadge) return;
 
-    let browserName = 'Chrome';
+    // Detect from the user agent — reliable, unlike `typeof browser`, which a
+    // polyfill or Chrome's own `browser` alias can make truthy on Chrome.
     const ua = navigator.userAgent;
-
-    if (typeof browser !== 'undefined' && browser.runtime) {
+    let browserName = 'Chrome';
+    if (ua.includes('Firefox/')) {
       browserName = 'Firefox';
     } else if (ua.includes('Edg/')) {
       browserName = 'Edge';
@@ -210,7 +224,6 @@ class FlowScribeUI {
     this.resetSettingsBtn = document.getElementById('resetSettingsBtn');
 
     // Enhanced settings
-    this.enableSelfHealing = document.getElementById('enableSelfHealing');
     this.enableNetworkRecording = document.getElementById('enableNetworkRecording');
     this.enablePOMGeneration = document.getElementById('enablePOMGeneration');
     this.includeScreenshots = document.getElementById('includeScreenshots');
@@ -222,6 +235,10 @@ class FlowScribeUI {
     this.aiModel = document.getElementById('aiModel');
     this.apiKey = document.getElementById('apiKey');
     this.toggleApiKeyBtn = document.getElementById('toggleApiKeyBtn');
+    this.testApiKeyBtn = document.getElementById('testApiKeyBtn');
+    this.apiKeyStatus = document.getElementById('apiKeyStatus');
+    this.dockInPageBtn = document.getElementById('dockInPageBtn');
+    this.themeToggleBtn = document.getElementById('themeToggleBtn');
 
     // Script modal elements
     this.closeScriptBtn = document.getElementById('closeScriptBtn');
@@ -244,6 +261,7 @@ class FlowScribeUI {
     this.toastMessage = document.getElementById('toastMessage');
     this.loadingOverlay = document.getElementById('loadingOverlay');
     this.loadingMessage = document.getElementById('loadingMessage');
+    this.stopGenerationBtn = document.getElementById('stopGenerationBtn');
 
     // Footer links
     this.helpLink = document.getElementById('helpLink');
@@ -309,12 +327,45 @@ class FlowScribeUI {
 
     // AI toggle
     this.enableAIToggle.addEventListener('change', () => this.toggleAIConfig());
-    this.aiProvider.addEventListener('change', () => this.updateModelOptions());
+    this.aiProvider.addEventListener('change', () => {
+      this.updateModelOptions();
+      this.setKeyStatus('', '');            // provider changed → previous validation is stale
+      if (this.apiKey.value.trim().length >= 8) this.testApiKey();
+    });
     this.aiModel.addEventListener('change', () => this.saveModelPreference());
 
     // API key visibility toggle
     if (this.toggleApiKeyBtn) {
       this.toggleApiKeyBtn.addEventListener('click', () => this.toggleApiKeyVisibility());
+    }
+
+    // Test the API key on demand, and auto-test shortly after it's entered/pasted.
+    if (this.testApiKeyBtn) {
+      this.testApiKeyBtn.addEventListener('click', () => this.testApiKey());
+    }
+    if (this.apiKey) {
+      this.apiKey.addEventListener('input', () => {
+        clearTimeout(this._keyTestTimer);
+        this.setKeyStatus('', '');
+        if (this.apiKey.value.trim().length >= 8) {
+          this._keyTestTimer = setTimeout(() => this.testApiKey(), 800);
+        }
+      });
+    }
+
+    // Open the in-page floating panel (the alternate UI) for the active tab.
+    if (this.dockInPageBtn) {
+      this.dockInPageBtn.addEventListener('click', () => this.dockInPage());
+    }
+
+    // Light / dark theme toggle.
+    if (this.themeToggleBtn) {
+      this.themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+    }
+
+    // Stop an in-progress script generation.
+    if (this.stopGenerationBtn) {
+      this.stopGenerationBtn.addEventListener('click', () => this.stopGeneration());
     }
 
     // Script modal
@@ -591,9 +642,9 @@ class FlowScribeUI {
     this.assertionsList.innerHTML = this.assertions.map(assertion => `
       <li data-id="${assertion.id}">
         <div class="assertion-info">
-          <span class="assertion-type-badge">${assertion.type}</span>
-          <span class="assertion-selector">${assertion.selector}</span>
-          ${assertion.value ? `<span class="assertion-value">= "${assertion.value.substring(0, 20)}${assertion.value.length > 20 ? '...' : ''}"</span>` : ''}
+          <span class="assertion-type-badge">${escapeHtml(assertion.type)}</span>
+          <span class="assertion-selector">${escapeHtml(assertion.selector)}</span>
+          ${assertion.value ? `<span class="assertion-value">= "${escapeHtml(assertion.value.substring(0, 20))}${assertion.value.length > 20 ? '...' : ''}"</span>` : ''}
         </div>
         <div class="assertion-actions">
           <button class="btn-icon-only delete-assertion" data-id="${assertion.id}" title="Delete">
@@ -686,7 +737,7 @@ class FlowScribeUI {
       return `
         <li data-session-id="${session.id}">
           <div class="history-info">
-            <div class="history-url">${this.formatUrlForDisplay(session.url)}</div>
+            <div class="history-url">${escapeHtml(this.formatUrlForDisplay(session.url))}</div>
             <div class="history-meta">
               <span>${formattedDate} ${formattedTime}</span>
               <span>${actionCount} actions</span>
@@ -824,7 +875,6 @@ class FlowScribeUI {
       aiProvider: 'openai',
       aiModel: 'gpt-4.1-mini',
       apiKey: '',
-      enableSelfHealing: true,
       enableNetworkRecording: true,
       enablePOMGeneration: true,
     };
@@ -839,7 +889,6 @@ class FlowScribeUI {
     });
 
     // Apply enhanced settings
-    if (this.enableSelfHealing) this.enableSelfHealing.checked = this.settings.enableSelfHealing !== false;
     if (this.enableNetworkRecording) this.enableNetworkRecording.checked = this.settings.enableNetworkRecording !== false;
     if (this.enablePOMGeneration) this.enablePOMGeneration.checked = this.settings.enablePOMGeneration !== false;
     if (this.includeScreenshots) this.includeScreenshots.checked = this.settings.includeScreenshots || false;
@@ -1108,7 +1157,9 @@ class FlowScribeUI {
 
     try {
       const providerName = this.settings.enableAI ? ` with ${this.settings.aiProvider || 'AI'}` : '';
+      this._generationCancelled = false;
       this.showLoading(`Generating script${providerName}...`);
+      if (this.stopGenerationBtn) this.stopGenerationBtn.style.display = 'inline-flex';
 
       const response = await chrome.runtime.sendMessage({
         type: 'GENERATE_SCRIPT',
@@ -1119,7 +1170,6 @@ class FlowScribeUI {
           options: {
             includeAssertions: this.assertions.length > 0,
             includeNetworkAssertions: this.settings.enableNetworkRecording,
-            applySelfHealing: this.settings.enableSelfHealing,
             generatePageObjects: this.settings.enablePOMGeneration,
             includeScreenshots: this.settings.includeScreenshots,
             addComments: true,
@@ -1127,6 +1177,12 @@ class FlowScribeUI {
           }
         }
       });
+
+      // User pressed Stop while this was in flight — discard the result.
+      if (this._generationCancelled) {
+        this._generationCancelled = false;
+        return;
+      }
 
       if (!response.success) {
         throw new Error(response.error || 'Failed to generate script');
@@ -1400,6 +1456,102 @@ class FlowScribeUI {
     });
   }
 
+  setKeyStatus(message, kind) {
+    if (!this.apiKeyStatus) return;
+    this.apiKeyStatus.textContent = message || '';
+    this.apiKeyStatus.className = 'api-key-status' + (kind ? ` is-${kind}` : '');
+    this.apiKeyStatus.style.display = message ? 'block' : 'none';
+  }
+
+  // Validate the entered key against the provider and, on success, populate the
+  // model dropdown from the provider's live list (newest first, auto-selected).
+  async testApiKey() {
+    const provider = this.aiProvider.value;
+    const apiKey = this.apiKey.value.trim();
+    if (apiKey.length < 8) {
+      this.setKeyStatus('Enter a valid API key first.', 'invalid');
+      return;
+    }
+    this.setKeyStatus('Checking key…', 'checking');
+    if (this.testApiKeyBtn) this.testApiKeyBtn.disabled = true;
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'TEST_API_KEY', data: { provider, apiKey } });
+      if (res && res.valid) {
+        const count = (res.models || []).length;
+        if (count) this.applyLiveModels(res.models);
+        this.setKeyStatus(`✓ Key valid — ${count} model${count === 1 ? '' : 's'} available (latest selected).`, 'valid');
+      } else {
+        this.setKeyStatus(`✗ ${res?.error || 'Key validation failed.'}`, 'invalid');
+      }
+    } catch (e) {
+      this.setKeyStatus(`✗ ${e.message || 'Could not reach the provider.'}`, 'invalid');
+    } finally {
+      if (this.testApiKeyBtn) this.testApiKeyBtn.disabled = false;
+    }
+  }
+
+  // Replace the model dropdown with the live list and select the newest model.
+  applyLiveModels(models) {
+    while (this.aiModel.firstChild) this.aiModel.removeChild(this.aiModel.firstChild);
+    models.forEach(m => {
+      const option = document.createElement('option');
+      option.value = m.value;
+      option.textContent = m.label;
+      this.aiModel.appendChild(option);
+    });
+    // "Always latest": newest is first in the returned list.
+    this.aiModel.value = models[0].value;
+    this.saveModelPreference();
+  }
+
+  async loadTheme() {
+    try {
+      const { flowScribeTheme } = await chrome.storage.local.get(['flowScribeTheme']);
+      this.applyTheme(flowScribeTheme === 'light' ? 'light' : 'dark');
+    } catch (e) {
+      this.applyTheme('dark');
+    }
+  }
+
+  applyTheme(theme) {
+    this.theme = theme;
+    document.documentElement.setAttribute('data-theme', theme);
+    const moon = this.themeToggleBtn?.querySelector('.theme-icon-dark');
+    const sun = this.themeToggleBtn?.querySelector('.theme-icon-light');
+    // Show the icon for the theme you'll switch TO.
+    if (moon && sun) {
+      moon.style.display = theme === 'light' ? 'block' : 'none'; // in light → offer dark (moon)
+      sun.style.display = theme === 'light' ? 'none' : 'block';  // in dark  → offer light (sun)
+    }
+  }
+
+  toggleTheme() {
+    const next = this.theme === 'light' ? 'dark' : 'light';
+    this.applyTheme(next);
+    chrome.storage.local.set({ flowScribeTheme: next }).catch(() => {});
+    this.showToast(`${next === 'light' ? 'Light' : 'Dark'} theme`, 'success');
+  }
+
+  stopGeneration() {
+    this._generationCancelled = true;
+    // Best-effort: tell the background to abort the in-flight AI request so we
+    // don't keep burning tokens on a result we're going to discard.
+    chrome.runtime.sendMessage({ type: 'CANCEL_GENERATION' }).catch(() => {});
+    this.hideLoading();
+    this.showToast('Generation stopped', 'success');
+  }
+
+  async dockInPage() {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+      await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
+      this.showToast('Opened in-page panel', 'success');
+    } catch (e) {
+      this.showToast('Could not open in-page panel on this page', 'error');
+    }
+  }
+
   async saveSettings() {
     try {
       const settings = {
@@ -1408,7 +1560,6 @@ class FlowScribeUI {
         aiProvider: this.aiProvider.value,
         aiModel: this.aiModel.value,
         apiKey: this.apiKey.value,
-        enableSelfHealing: this.enableSelfHealing.checked,
         enableNetworkRecording: this.enableNetworkRecording.checked,
         enablePOMGeneration: this.enablePOMGeneration.checked,
         includeScreenshots: this.includeScreenshots?.checked || false
@@ -1509,15 +1660,27 @@ class FlowScribeUI {
   }
 
   // ===== Actions List Management =====
+  // Assign a stable id to any action missing one so enable/disable state
+  // survives deletes (array indices shift; ids do not).
+  ensureActionIds() {
+    this.actions.forEach(action => {
+      if (action.id === undefined || action.id === null) {
+        action.id = `a${this._nextActionId++}`;
+      }
+    });
+  }
+
   getEnabledActions() {
-    return this.actions.filter((action, index) => {
-      if (this.disabledActionIds.has(index)) return false;
+    this.ensureActionIds();
+    return this.actions.filter(action => {
+      if (this.disabledActionIds.has(action.id)) return false;
       if (this.hiddenActionTypes.has(action.type)) return false;
       return true;
     });
   }
 
   updateActionsList() {
+    this.ensureActionIds();
     if (this.actions.length > 0) {
       this.actionsPanel.style.display = 'block';
       this.actionsEmpty.style.display = 'none';
@@ -1558,7 +1721,7 @@ class FlowScribeUI {
         const chip = document.createElement('span');
         const isHidden = this.hiddenActionTypes.has(type);
         chip.className = `filter-chip${isHidden ? ' hidden' : ' active'}`;
-        chip.innerHTML = `${type} <span class="filter-chip-count">${count}</span>`;
+        chip.innerHTML = `${escapeHtml(type)} <span class="filter-chip-count">${count}</span>`;
         chip.addEventListener('click', () => {
           if (this.hiddenActionTypes.has(type)) {
             this.hiddenActionTypes.delete(type);
@@ -1587,22 +1750,22 @@ class FlowScribeUI {
       }
 
       const li = document.createElement('li');
-      const isDisabled = this.disabledActionIds.has(index);
+      const isDisabled = this.disabledActionIds.has(action.id);
       const isTypeHidden = this.hiddenActionTypes.has(action.type);
       li.className = `action-item${isDisabled ? ' action-disabled' : ''}${isTypeHidden ? ' type-hidden' : ''}`;
-      li.setAttribute('data-index', index);
+      li.setAttribute('data-id', action.id);
 
       const description = this.getActionDescription(action);
 
       li.innerHTML = `
         <label class="action-checkbox-label">
-          <input type="checkbox" class="action-checkbox" data-index="${index}" ${isDisabled ? '' : 'checked'}>
+          <input type="checkbox" class="action-checkbox" ${isDisabled ? '' : 'checked'}>
           <span class="action-checkmark"></span>
         </label>
         <span class="action-number">${index + 1}</span>
-        <span class="action-type-badge">${action.type}</span>
-        <span class="action-description">${description}</span>
-        <button class="btn-icon-only delete-action" data-index="${index}" title="Delete">
+        <span class="action-type-badge">${escapeHtml(action.type)}</span>
+        <span class="action-description">${escapeHtml(description)}</span>
+        <button class="btn-icon-only delete-action" title="Delete">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="18" y1="6" x2="6" y2="18"></line>
             <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -1611,12 +1774,11 @@ class FlowScribeUI {
       `;
 
       li.querySelector('.action-checkbox').addEventListener('change', (e) => {
-        const idx = parseInt(e.target.dataset.index);
         if (e.target.checked) {
-          this.disabledActionIds.delete(idx);
+          this.disabledActionIds.delete(action.id);
           li.classList.remove('action-disabled');
         } else {
-          this.disabledActionIds.add(idx);
+          this.disabledActionIds.add(action.id);
           li.classList.add('action-disabled');
         }
         const enabledCount = this.getEnabledActions().length;
@@ -1627,7 +1789,7 @@ class FlowScribeUI {
 
       li.querySelector('.delete-action').addEventListener('click', (e) => {
         e.stopPropagation();
-        this.deleteAction(index);
+        this.deleteAction(action.id);
       });
 
       this.actionsList.appendChild(li);
@@ -1678,8 +1840,11 @@ class FlowScribeUI {
     this.showToast('All actions cleared', 'success');
   }
 
-  deleteAction(index) {
+  deleteAction(id) {
+    const index = this.actions.findIndex(a => a.id === id);
+    if (index === -1) return;
     this.actions.splice(index, 1);
+    this.disabledActionIds.delete(id);
     chrome.runtime.sendMessage({
       type: 'UPDATE_ACTIONS',
       actions: this.actions
@@ -1696,6 +1861,7 @@ class FlowScribeUI {
 
   hideLoading() {
     this.loadingOverlay.style.display = 'none';
+    if (this.stopGenerationBtn) this.stopGenerationBtn.style.display = 'none';
   }
 
   showToast(message, type = 'info') {

@@ -30,6 +30,21 @@
             </div>
             <div class="header-actions">
                 <span class="browser-badge" id="browserBadge">Chrome</span>
+                <button class="settings-btn" id="themeToggleBtn" title="Toggle light / dark theme">
+                    <svg class="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg class="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"></path>
+                    </svg>
+                </button>
+                <button class="settings-btn" id="dockInPageBtn" title="Show the in-page floating panel instead">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                        <rect x="13" y="7" width="6" height="10" rx="1" fill="currentColor" stroke="none"></rect>
+                    </svg>
+                </button>
                 <button class="settings-btn" id="settingsBtn" title="Settings">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -106,19 +121,19 @@
                 <div class="framework-grid">
                     <button class="framework-btn active" data-framework="playwright" title="Playwright">
                         <svg class="framework-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
-                        PW
+                        Playwright
                     </button>
                     <button class="framework-btn" data-framework="selenium" title="Selenium">
                         <svg class="framework-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                        SE
+                        Selenium
                     </button>
                     <button class="framework-btn" data-framework="cypress" title="Cypress">
                         <svg class="framework-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-                        CY
+                        Cypress
                     </button>
                     <button class="framework-btn" data-framework="puppeteer" title="Puppeteer">
                         <svg class="framework-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-                        PUP
+                        Puppeteer
                     </button>
                 </div>
                 <input type="hidden" id="frameworkSelect" value="playwright">
@@ -444,14 +459,6 @@
                     <div class="setting-group">
                         <h4>Enhanced Features</h4>
                         <label class="setting-item">
-                            <input type="checkbox" id="enableSelfHealing" checked>
-                            <span class="checkmark"></span>
-                            <div class="setting-text">
-                                <span class="setting-title">Self-Healing Tests</span>
-                                <span class="setting-desc">Automatically fix broken selectors</span>
-                            </div>
-                        </label>
-                        <label class="setting-item">
                             <input type="checkbox" id="enableNetworkRecording" checked>
                             <span class="checkmark"></span>
                             <div class="setting-text">
@@ -471,8 +478,8 @@
                             <input type="checkbox" id="includeScreenshots">
                             <span class="checkmark"></span>
                             <div class="setting-text">
-                                <span class="setting-title">Include Screenshots</span>
-                                <span class="setting-desc">Add screenshot steps to generated script</span>
+                                <span class="setting-title">Include Screenshots (Vision)</span>
+                                <span class="setting-desc">Adds screenshot steps to the script AND sends page screenshots to the AI for smarter generation. Requires a vision-capable model. ⚠️ Screenshots may contain sensitive on-screen data.</span>
                             </div>
                         </label>
                     </div>
@@ -519,14 +526,16 @@
                                 <label>API Key:</label>
                                 <div class="api-key-input">
                                     <input type="password" id="apiKey" placeholder="Enter your API key">
-                                    <button class="btn-icon-only" id="toggleApiKeyBtn" type="button">
+                                    <button class="btn-icon-only" id="toggleApiKeyBtn" type="button" title="Show / hide key">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                                             stroke="currentColor" stroke-width="2">
                                             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                                             <circle cx="12" cy="12" r="3"></circle>
                                         </svg>
                                     </button>
+                                    <button class="btn btn-outline btn-sm" id="testApiKeyBtn" type="button">Test Key</button>
                                 </div>
+                                <div class="api-key-status" id="apiKeyStatus" role="status" aria-live="polite" style="display: none;"></div>
                             </div>
                         </div>
                     </div>
@@ -601,11 +610,15 @@
         <div class="loading-overlay" id="loadingOverlay" style="display: none;">
             <div class="loading-spinner"></div>
             <p id="loadingMessage">Generating script...</p>
+            <button class="btn btn-outline btn-sm" id="stopGenerationBtn" style="display: none; margin-top: 12px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>
+                Stop Generation
+            </button>
         </div>
 
         <!-- Footer -->
         <div class="footer">
-            <span class="version">v4.0</span>
+            <span class="version">v5.0</span>
             <div class="footer-links">
                 <a href="#" id="helpLink" class="footer-link">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

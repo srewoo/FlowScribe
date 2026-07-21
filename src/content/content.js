@@ -212,14 +212,16 @@ class RecordingIndicator {
       this.startDrag(e.clientX, e.clientY);
     });
 
-    document.addEventListener('mousemove', (e) => {
+    // Document-level handlers stored as instance props so they can be removed in remove()
+    this._onDocMouseMove = (e) => {
       if (this.isDragging) {
         e.preventDefault();
         this.drag(e.clientX, e.clientY);
       }
-    });
+    };
+    document.addEventListener('mousemove', this._onDocMouseMove);
 
-    document.addEventListener('mouseup', (e) => {
+    this._onDocMouseUp = (e) => {
       if (this.isDragging) {
         this.stopDrag();
 
@@ -234,7 +236,8 @@ class RecordingIndicator {
           this.handleClick();
         }
       }
-    });
+    };
+    document.addEventListener('mouseup', this._onDocMouseUp);
 
     // Touch events for mobile
     this.indicator.addEventListener('touchstart', (e) => {
@@ -245,15 +248,16 @@ class RecordingIndicator {
       this.startDrag(touch.clientX, touch.clientY);
     });
 
-    document.addEventListener('touchmove', (e) => {
+    this._onDocTouchMove = (e) => {
       if (this.isDragging && e.touches.length > 0) {
         e.preventDefault();
         const touch = e.touches[0];
         this.drag(touch.clientX, touch.clientY);
       }
-    });
+    };
+    document.addEventListener('touchmove', this._onDocTouchMove);
 
-    document.addEventListener('touchend', (e) => {
+    this._onDocTouchEnd = (e) => {
       if (this.isDragging) {
         this.stopDrag();
 
@@ -269,7 +273,8 @@ class RecordingIndicator {
           this.handleClick();
         }
       }
-    });
+    };
+    document.addEventListener('touchend', this._onDocTouchEnd);
   }
 
   /**
@@ -441,6 +446,22 @@ class RecordingIndicator {
     if (this._hoverDetector) {
       document.removeEventListener('mousemove', this._hoverDetector);
       this._hoverDetector = null;
+    }
+    if (this._onDocMouseMove) {
+      document.removeEventListener('mousemove', this._onDocMouseMove);
+      this._onDocMouseMove = null;
+    }
+    if (this._onDocMouseUp) {
+      document.removeEventListener('mouseup', this._onDocMouseUp);
+      this._onDocMouseUp = null;
+    }
+    if (this._onDocTouchMove) {
+      document.removeEventListener('touchmove', this._onDocTouchMove);
+      this._onDocTouchMove = null;
+    }
+    if (this._onDocTouchEnd) {
+      document.removeEventListener('touchend', this._onDocTouchEnd);
+      this._onDocTouchEnd = null;
     }
     if (this.indicator) {
       this.indicator.classList.remove('flowscribe-visible');
@@ -659,9 +680,10 @@ class FloatingPanel {
         justify-content: space-between;
         align-items: center;
         padding: 10px 14px;
-        background: #1e1b4b;
-        color: #fff;
+        background: #16161e;
+        color: #c0caf5;
         cursor: move;
+        border-bottom: 1px solid #2a2c3d;
         user-select: none;
         flex-shrink: 0;
         border-radius: 12px 12px 0 0;
@@ -785,7 +807,7 @@ class FloatingPanel {
       document.body.style.cursor = 'grabbing';
     });
 
-    document.addEventListener('mousemove', (e) => {
+    this._onDragMouseMove = (e) => {
       if (!this.isDragging) return;
       e.preventDefault();
       let x = e.clientX - this.dragOffset.x;
@@ -795,15 +817,17 @@ class FloatingPanel {
       this.container.style.left = x + 'px';
       this.container.style.top = y + 'px';
       this.position = { x, y };
-    });
+    };
+    document.addEventListener('mousemove', this._onDragMouseMove);
 
-    document.addEventListener('mouseup', () => {
+    this._onDragMouseUp = () => {
       if (!this.isDragging) return;
       this.isDragging = false;
       this.container.classList.remove('fsp-dragging');
       document.body.style.cursor = '';
       this.savePosition();
-    });
+    };
+    document.addEventListener('mouseup', this._onDragMouseUp);
   }
 
   setupMessageListener() {
@@ -867,6 +891,14 @@ class FloatingPanel {
   }
 
   close() {
+    if (this._onDragMouseMove) {
+      document.removeEventListener('mousemove', this._onDragMouseMove);
+      this._onDragMouseMove = null;
+    }
+    if (this._onDragMouseUp) {
+      document.removeEventListener('mouseup', this._onDragMouseUp);
+      this._onDragMouseUp = null;
+    }
     if (this.container) {
       this.container.classList.remove('fsp-visible');
       setTimeout(() => {
@@ -1068,6 +1100,10 @@ class FlowScribeRecorder {
   }
 
   setupIframeMonitoring() {
+    // Disconnect any prior observer to avoid duplicate observers on re-init
+    if (this.iframeObserver) {
+      this.iframeObserver.disconnect();
+    }
     const observer = new MutationObserver((mutations) => {
       mutations.forEach((mutation) => {
         mutation.addedNodes.forEach((node) => {
@@ -1081,6 +1117,7 @@ class FlowScribeRecorder {
         });
       });
     });
+    this.iframeObserver = observer;
 
     observer.observe(document.body || document.documentElement, {
       childList: true,
@@ -1240,6 +1277,12 @@ class FlowScribeRecorder {
     this.removeEventListeners();
     this.hideRecordingIndicator();
 
+    // Disconnect the iframe MutationObserver so it stops observing when not recording
+    if (this.iframeObserver) {
+      this.iframeObserver.disconnect();
+      this.iframeObserver = null;
+    }
+
     // Notify iframes to stop recording
     this.iframes.forEach((iframeInfo, iframeId) => {
       if (iframeInfo.accessible && iframeInfo.element.contentWindow) {
@@ -1295,8 +1338,10 @@ class FlowScribeRecorder {
   }
 
   setupEventListeners() {
-    const events = ['click', 'input', 'change', 'focus', 'blur', 'keydown', 'submit'];
-    
+    // focus/blur are intentionally NOT recorded — they add no value to a
+    // generated test (click/fill imply focus) and only create noise.
+    const events = ['click', 'input', 'change', 'keydown', 'submit'];
+
     this.eventListeners = {};
     
     events.forEach(eventType => {
@@ -1324,27 +1369,48 @@ class FlowScribeRecorder {
     // Skip recording for certain elements
     if (this.shouldSkipElement(target)) return;
 
+    // Only record meaningful keydowns. Printable characters and modifiers are
+    // captured by the resulting `input` event, so recording every keystroke
+    // just produces noise (and defeats input coalescing). Keep only real
+    // navigation/submission keys.
+    if (event.type === 'keydown') {
+      const MEANINGFUL_KEYS = new Set([
+        'Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'
+      ]);
+      if (!MEANINGFUL_KEYS.has(event.key)) return;
+    }
+
     const action = this.createAction(event, target);
     const enhancedAction = this.enhanceActionDetection(action, target, event);
-    
+
     // Apply action deduplication and optimization
-    const optimizedAction = this.optimizeAction(enhancedAction);
-    if (!optimizedAction) return; // Action was filtered out
-    
-    this.actions.push(optimizedAction);
+    const result = this.optimizeAction(enhancedAction);
+
+    if (result === 'SKIP') return; // Action was filtered out entirely
+
+    if (result === 'COALESCED') {
+      // The last input was updated in place (e.g. successive keystrokes into
+      // the same field). Re-sync the full cleaned list to the background so it
+      // holds the final value, not the first keystroke.
+      chrome.runtime.sendMessage({
+        type: 'UPDATE_ACTIONS',
+        actions: this.actions,
+        url: window.location.href
+      });
+      return;
+    }
+
+    this.actions.push(result);
 
     Logger.log('✅ Action recorded with DOM data:', {
-      type: optimizedAction.type,
-      element: optimizedAction.element,
-      hasAttributes: !!optimizedAction.element?.attributes,
-      hasTestAttributes: !!optimizedAction.element?.testAttributes,
+      type: result.type,
       totalActionsRecorded: this.actions.length
     });
 
     // Send individual action to background script immediately
     chrome.runtime.sendMessage({
       type: 'ACTION_RECORDED',
-      action: optimizedAction,
+      action: result,
       sessionActions: this.actions.length,
       url: window.location.href
     });
@@ -1353,34 +1419,35 @@ class FlowScribeRecorder {
   optimizeAction(action) {
     // Deduplication and optimization logic
     const lastAction = this.actions[this.actions.length - 1];
-    
+
     // Skip rapid duplicate clicks
-    if (action.type === 'click' && lastAction?.type === 'click' && 
+    if (action.type === 'click' && lastAction?.type === 'click' &&
         this.isSameElement(action.element, lastAction.element) &&
         (action.timestamp - lastAction.timestamp) < 300) {
-      return null; // Skip this duplicate click
+      return 'SKIP'; // duplicate click
     }
-    
-    // Optimize input actions - replace multiple fills with final value
-    if ((action.type === 'input' || action.type === 'change') && 
+
+    // Optimize input actions - replace multiple fills with the final value
+    if ((action.type === 'input' || action.type === 'change') &&
         lastAction && (lastAction.type === 'input' || lastAction.type === 'change') &&
         this.isSameElement(action.element, lastAction.element)) {
-      
+
       // Replace the last action instead of adding a new one
       this.actions[this.actions.length - 1] = {
         ...lastAction,
+        type: action.type,
         value: action.value,
         timestamp: action.timestamp
       };
-      return null; // Don't add new action
+      return 'COALESCED';
     }
-    
+
     // Skip redundant focus/blur events if they don't add value
-    if ((action.type === 'focus' || action.type === 'blur') && 
+    if ((action.type === 'focus' || action.type === 'blur') &&
         lastAction && this.isSameElement(action.element, lastAction.element)) {
-      return null;
+      return 'SKIP';
     }
-    
+
     return action;
   }
 
@@ -1409,17 +1476,37 @@ class FlowScribeRecorder {
 
   shouldSkipElement(element) {
     const skipTags = ['SCRIPT', 'STYLE', 'META', 'LINK', 'TITLE'];
-    const skipClasses = ['flowscribe-ignore'];
-    
     if (skipTags.includes(element.tagName)) return true;
-    if (skipClasses.some(cls => element.classList.contains(cls))) return true;
-    
+
+    // Never record interactions with FlowScribe's own injected UI (recording
+    // indicator, floating panel, pill, element picker). Otherwise clicking our
+    // own widgets shows up as recorded user actions.
+    if (typeof element.closest === 'function') {
+      if (element.closest(
+        '#flowscribe-panel, #flowscribe-recording-indicator, .flowscribe-floating-indicator, ' +
+        '.flowscribe-ignore, [class*="flowscribe-"], [class^="fsp-"], [id^="fsp-"], [id^="flowscribe-"]'
+      )) {
+        return true;
+      }
+    }
+
     return false;
+  }
+
+  isSensitiveField(el) {
+    if (!el) return false;
+    if (el.type === 'password') return true;
+    const autocomplete = (el.autocomplete || '').toLowerCase();
+    if (/password|cc-|credit|current-password|new-password/.test(autocomplete)) return true;
+    const identifiers = [el.name, el.id, el.getAttribute && el.getAttribute('aria-label')]
+      .filter(Boolean).join(' ').toLowerCase();
+    return /pass|pwd|secret|token|otp|cvv|ssn|card|pin/.test(identifiers);
   }
 
   createAction(event, target) {
     const rect = target.getBoundingClientRect();
-    
+    const sensitive = this.isSensitiveField(target);
+
     const action = {
       id: ++this.actionId,
       type: event.type,
@@ -1432,7 +1519,7 @@ class FlowScribeRecorder {
         name: target.name || '',
         type: target.type || '',
         textContent: target.textContent ? target.textContent.substring(0, 100) : '',
-        value: target.value || '',
+        value: sensitive ? '***MASKED***' : (target.value || ''),
         placeholder: target.placeholder || '',
         xpath: this.generateXPath(target),
         cssSelector: this.generateCSSSelector(target),
@@ -1451,7 +1538,7 @@ class FlowScribeRecorder {
 
     // Add specific data based on event type
     if (event.type === 'input' || event.type === 'change') {
-      action.value = target.value;
+      action.value = sensitive ? '***MASKED***' : target.value;
     }
     if (event.type === 'keydown') {
       action.key = event.key;
@@ -1560,7 +1647,7 @@ class FlowScribeRecorder {
         .filter(el => el.tagName === current.tagName);
       if (siblings.length > 1) {
         const index = siblings.indexOf(current) + 1;
-        selector += `:nth-child(${index})`;
+        selector += `:nth-of-type(${index})`;
       }
       
       path.unshift(selector);
@@ -1808,8 +1895,10 @@ class FlowScribeRecorder {
     // Comprehensive element attributes for intelligent locator generation
     if (target.hasAttributes()) {
       enhanced.element.attributes = {};
+      const sensitive = this.isSensitiveField(target);
       for (let attr of target.attributes) {
-        enhanced.element.attributes[attr.name] = attr.value;
+        enhanced.element.attributes[attr.name] =
+          (sensitive && attr.name === 'value') ? '***MASKED***' : attr.value;
       }
       
       // Identify test-specific attributes for highest priority locators
@@ -2476,7 +2565,7 @@ class FlowScribeRecorder {
       name: element.name || null,
       type: element.type || null,
       textContent: element.textContent?.trim().substring(0, 200) || null,
-      value: element.value || null,
+      value: this.isSensitiveField(element) ? '***MASKED***' : (element.value || null),
       placeholder: element.placeholder || null,
       href: element.href || null,
       src: element.src || null,

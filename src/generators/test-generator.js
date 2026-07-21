@@ -54,20 +54,70 @@ class BaseGenerator {
     return waits;
   }
 
+  /**
+   * Escape a string for embedding inside a host string literal delimited by `quote`.
+   * Escapes backslash first, then the delimiter, then whitespace control chars.
+   */
+  escapeForQuote(str, quote = "'") {
+    if (str === null || str === undefined) return '';
+    let s = String(str).replace(/\\/g, '\\\\');
+    s = quote === '"' ? s.replace(/"/g, '\\"') : s.replace(/'/g, "\\'");
+    return s.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+  }
+
+  /**
+   * Universal escaper safe for both single- and double-quoted host strings across
+   * JS/TS, Java, Python and C# — all four accept \' and \" as valid string escapes,
+   * so escaping both quote styles never breaks the emitted literal. Used for every
+   * recorded value/selector interpolated into generated code.
+   */
   sanitizeString(str) {
-    if (!str) return '';
-    return str.replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t');
   }
 
   generateSelector(target) {
     // Priority: data-testid > id > optimal selector
+    let selector;
     if (target.attributes?.['data-testid']) {
-      return `[data-testid="${target.attributes['data-testid']}"]`;
+      selector = `[data-testid="${target.attributes['data-testid']}"]`;
+    } else if (target.id) {
+      selector = `#${target.id}`;
+    } else {
+      selector = target.selector || target.xpath || '';
     }
-    if (target.id) {
-      return `#${target.id}`;
-    }
-    return target.selector || target.xpath;
+    // Escape here so every call site (all of which embed the result in a quoted
+    // string literal) is safe regardless of host quote style.
+    return this.sanitizeString(selector);
+  }
+
+  /**
+   * Build a selector for an iframe element from the recorded frame context
+   * ({ id, src, title }). Returns null when no frame context is present.
+   */
+  /**
+   * The initial navigation is always emitted separately in each test's setup
+   * (as `startUrl`). Strip that one action from the loop body so it isn't
+   * navigated to twice. Removes the first action carrying a url — the same one
+   * `actions.find(a => a.url)` selects for startUrl.
+   */
+  stripStartAction(actions) {
+    const idx = actions.findIndex(a => a.url);
+    if (idx === -1) return actions;
+    return actions.filter((_, i) => i !== idx);
+  }
+
+  iframeSelector(iframe) {
+    if (!iframe) return null;
+    if (iframe.id) return this.sanitizeString(`#${iframe.id}`);
+    if (iframe.src) return this.sanitizeString(`iframe[src="${iframe.src}"]`);
+    return 'iframe';
   }
 }
 
@@ -136,7 +186,7 @@ const fs = require('fs');
     script += `${this.indent(2)}// Navigate to starting page\n`;
     script += `${this.indent(2)}await page.goto('${startUrl}', { waitUntil: 'networkidle' });\n\n`;
 
-    for (const action of actions) {
+    for (const action of this.stripStartAction(actions)) {
       if (includeComments && action.pageTitle) {
         script += `${this.indent(2)}// Page: ${action.pageTitle}\n`;
       }
@@ -152,8 +202,12 @@ const fs = require('fs');
     let code = '';
     const indent = this.indent(2);
 
-    // Use modern Playwright locator API
-    const locatorCode = this.generateModernLocator(action.target);
+    // Use modern Playwright locator API, scoped to a frame when the action was
+    // recorded inside an iframe.
+    const frameSel = this.iframeSelector(action.iframe);
+    const locatorCode = frameSel
+      ? `page.frameLocator('${frameSel}').locator('${this.generateSelector(action.target)}')`
+      : this.generateModernLocator(action.target);
 
     switch (action.type) {
       case 'click':
@@ -189,9 +243,10 @@ const fs = require('fs');
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `${indent}await ${locatorCode}.selectOption('${action.value}');\n`;
+          const selVal = this.sanitizeString(action.value);
+          code += `${indent}await ${locatorCode}.selectOption('${selVal}');\n`;
           if (includeAssertions) {
-            code += `${indent}await expect(${locatorCode}).toHaveValue('${action.value}');\n`;
+            code += `${indent}await expect(${locatorCode}).toHaveValue('${selVal}');\n`;
           }
         } else if (action.checked !== undefined) {
           const checkMethod = action.checked ? 'check' : 'uncheck';
@@ -277,21 +332,22 @@ const fs = require('fs');
     const indent = this.indent(2);
 
     for (const assertion of assertions) {
+      const sel = this.sanitizeString(assertion.selector);
       switch (assertion.type) {
         case 'visible':
-          code += `${indent}await expect(page.locator('${assertion.selector}')).toBeVisible();\n`;
+          code += `${indent}await expect(page.locator('${sel}')).toBeVisible();\n`;
           break;
         case 'value':
-          code += `${indent}await expect(page.locator('${assertion.selector}')).toHaveValue('${this.sanitizeString(assertion.value)}');\n`;
+          code += `${indent}await expect(page.locator('${sel}')).toHaveValue('${this.sanitizeString(assertion.value)}');\n`;
           break;
         case 'text':
-          code += `${indent}await expect(page.locator('${assertion.selector}')).toContainText('${this.sanitizeString(assertion.expected)}');\n`;
+          code += `${indent}await expect(page.locator('${sel}')).toContainText('${this.sanitizeString(assertion.expected)}');\n`;
           break;
         case 'attribute':
-          code += `${indent}await expect(page.locator('${assertion.selector}')).toHaveAttribute('${assertion.attribute}', '${assertion.value}');\n`;
+          code += `${indent}await expect(page.locator('${sel}')).toHaveAttribute('${this.sanitizeString(assertion.attribute)}', '${this.sanitizeString(assertion.value)}');\n`;
           break;
         case 'has_class':
-          code += `${indent}await expect(page.locator('${assertion.selector}')).toHaveClass(/${assertion.classes.join('|')}/);\n`;
+          code += `${indent}await expect(page.locator('${sel}')).toHaveClass(/${assertion.classes.join('|')}/);\n`;
           break;
         case 'url':
           code += `${indent}await expect(page).toHaveURL(/${assertion.pattern}/);\n`;
@@ -504,6 +560,7 @@ import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.Select;
 import org.openqa.selenium.interactions.Actions;
 import org.openqa.selenium.JavascriptExecutor;
+import java.time.Duration;
 import org.junit.Test;
 import org.junit.Before;
 import org.junit.After;
@@ -519,7 +576,7 @@ public class FlowScribeTest {
     public void setUp() {
         System.setProperty("webdriver.chrome.driver", "path/to/chromedriver");
         driver = new ChromeDriver();
-        wait = new WebDriverWait(driver, 30);
+        wait = new WebDriverWait(driver, Duration.ofSeconds(30));
         actions = new Actions(driver);
         js = (JavascriptExecutor) driver;
         driver.manage().window().maximize();
@@ -532,9 +589,9 @@ public class FlowScribeTest {
     const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
     script += `        driver.get("${startUrl}");\n\n`;
 
-    for (const action of actions) {
-      script += this.generateJavaAction(action, options);
-    }
+    this.stripStartAction(actions).forEach((action, i) => {
+      script += this.generateJavaAction(action, options, i);
+    });
 
     script += `    }
 
@@ -570,11 +627,24 @@ public class FlowScribeTest {
     return script;
   }
 
-  generateJavaAction(action, options) {
+  generateJavaAction(action, options, index = 0) {
     let code = '';
     const indent = '        ';
+    // Suffix declared locals with the action index so repeated inputs/selects/
+    // checkboxes don't redeclare the same variable in the method scope.
+    const v = `_${index}`;
+
+    // Enter the recorded iframe before the action, restore default content after.
+    const frameSel = this.iframeSelector(action.iframe);
+    if (frameSel) {
+      code += `${indent}driver.switchTo().frame(findElement("${frameSel}"));\n`;
+    }
 
     switch (action.type) {
+      case 'navigate':
+        code += `${indent}driver.get("${this.sanitizeString(action.url)}");\n`;
+        break;
+
       case 'click':
         code += `${indent}findElement("${this.generateSelector(action.target)}").click();\n`;
         break;
@@ -582,25 +652,25 @@ public class FlowScribeTest {
       case 'input': {
         const isSensitiveJava = action.target?.type === 'password' ||
           /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
-        code += `${indent}WebElement inputElement = findElement("${this.generateSelector(action.target)}");\n`;
-        code += `${indent}inputElement.clear();\n`;
+        code += `${indent}WebElement inputElement${v} = findElement("${this.generateSelector(action.target)}");\n`;
+        code += `${indent}inputElement${v}.clear();\n`;
         if (isSensitiveJava) {
           code += `${indent}// TODO: set TEST_PASSWORD env var (value masked for security)\n`;
-          code += `${indent}inputElement.sendKeys(System.getenv("TEST_PASSWORD"));\n`;
+          code += `${indent}inputElement${v}.sendKeys(System.getenv("TEST_PASSWORD"));\n`;
         } else {
-          code += `${indent}inputElement.sendKeys("${this.sanitizeString(action.value)}");\n`;
+          code += `${indent}inputElement${v}.sendKeys("${this.sanitizeString(action.value)}");\n`;
         }
         break;
       }
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `${indent}Select select = new Select(findElement("${this.generateSelector(action.target)}"));\n`;
-          code += `${indent}select.selectByValue("${action.value}");\n`;
+          code += `${indent}Select select${v} = new Select(findElement("${this.generateSelector(action.target)}"));\n`;
+          code += `${indent}select${v}.selectByValue("${this.sanitizeString(action.value)}");\n`;
         } else if (action.checked !== undefined) {
-          code += `${indent}WebElement checkbox = findElement("${this.generateSelector(action.target)}");\n`;
-          code += `${indent}if (checkbox.isSelected() != ${action.checked}) {\n`;
-          code += `${indent}    checkbox.click();\n`;
+          code += `${indent}WebElement checkbox${v} = findElement("${this.generateSelector(action.target)}");\n`;
+          code += `${indent}if (checkbox${v}.isSelected() != ${action.checked}) {\n`;
+          code += `${indent}    checkbox${v}.click();\n`;
           code += `${indent}}\n`;
         }
         break;
@@ -609,8 +679,8 @@ public class FlowScribeTest {
         if (action.target === 'document') {
           code += `${indent}js.executeScript("window.scrollTo(${action.position.x}, ${action.position.y})");\n`;
         } else {
-          code += `${indent}WebElement element = findElement("${this.generateSelector(action.target)}");\n`;
-          code += `${indent}js.executeScript("arguments[0].scrollIntoView(true);", element);\n`;
+          code += `${indent}WebElement element${v} = findElement("${this.generateSelector(action.target)}");\n`;
+          code += `${indent}js.executeScript("arguments[0].scrollIntoView(true);", element${v});\n`;
         }
         break;
 
@@ -619,15 +689,20 @@ public class FlowScribeTest {
         break;
 
       case 'drag-drop':
-        code += `${indent}WebElement source = findElement("${this.generateSelector(action.source.element)}");\n`;
-        code += `${indent}WebElement target = findElement("${this.generateSelector(action.target)}");\n`;
-        code += `${indent}actions.dragAndDrop(source, target).perform();\n`;
+        code += `${indent}WebElement source${v} = findElement("${this.generateSelector(action.source.element)}");\n`;
+        code += `${indent}WebElement target${v} = findElement("${this.generateSelector(action.target)}");\n`;
+        code += `${indent}actions.dragAndDrop(source${v}, target${v}).perform();\n`;
         break;
     }
 
     // Add assertions
     if (options.includeAssertions && action.assertions) {
       code += this.generateJavaAssertions(action.assertions);
+    }
+
+    // Leave the iframe context once the action and its assertions are done.
+    if (frameSel) {
+      code += `${indent}driver.switchTo().defaultContent();\n`;
     }
 
     // Add explicit wait if there's significant delay (instead of Thread.sleep)
@@ -645,15 +720,16 @@ public class FlowScribeTest {
     const indent = '        ';
 
     for (const assertion of assertions) {
+      const sel = this.sanitizeString(assertion.selector);
       switch (assertion.type) {
         case 'visible':
-          code += `${indent}assertTrue(findElement("${assertion.selector}").isDisplayed());\n`;
+          code += `${indent}assertTrue(findElement("${sel}").isDisplayed());\n`;
           break;
         case 'value':
-          code += `${indent}assertEquals("${this.sanitizeString(assertion.value)}", findElement("${assertion.selector}").getAttribute("value"));\n`;
+          code += `${indent}assertEquals("${this.sanitizeString(assertion.value)}", findElement("${sel}").getAttribute("value"));\n`;
           break;
         case 'text':
-          code += `${indent}assertTrue(findElement("${assertion.selector}").getText().contains("${this.sanitizeString(assertion.expected)}"));\n`;
+          code += `${indent}assertTrue(findElement("${sel}").getText().contains("${this.sanitizeString(assertion.expected)}"));\n`;
           break;
       }
     }
@@ -685,7 +761,7 @@ class FlowScribeTest(unittest.TestCase):
     const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
     script += `        self.driver.get("${startUrl}")\n\n`;
 
-    for (const action of actions) {
+    for (const action of this.stripStartAction(actions)) {
       script += this.generatePythonAction(action, options);
     }
 
@@ -714,6 +790,12 @@ if __name__ == "__main__":
     let code = '';
     const indent = '        ';
 
+    // Enter the recorded iframe before the action, restore default content after.
+    const frameSel = this.iframeSelector(action.iframe);
+    if (frameSel) {
+      code += `${indent}self.driver.switch_to.frame(self.find_element("${frameSel}"))\n`;
+    }
+
     switch (action.type) {
       case 'click':
         code += `${indent}self.find_element("${this.generateSelector(action.target)}").click()\n`;
@@ -737,7 +819,7 @@ if __name__ == "__main__":
       case 'change':
         if (action.target.tagName === 'select') {
           code += `${indent}select = Select(self.find_element("${this.generateSelector(action.target)}"))\n`;
-          code += `${indent}select.select_by_value("${action.value}")\n`;
+          code += `${indent}select.select_by_value("${this.sanitizeString(action.value)}")\n`;
         } else if (action.checked !== undefined) {
           code += `${indent}checkbox = self.find_element("${this.generateSelector(action.target)}")\n`;
           code += `${indent}if checkbox.is_selected() != ${action.checked ? 'True' : 'False'}:\n`;
@@ -771,6 +853,11 @@ if __name__ == "__main__":
       code += this.generatePythonAssertions(action.assertions);
     }
 
+    // Leave the iframe context once the action and its assertions are done.
+    if (frameSel) {
+      code += `${indent}self.driver.switch_to.default_content()\n`;
+    }
+
     return code;
   }
 
@@ -779,15 +866,16 @@ if __name__ == "__main__":
     const indent = '        ';
 
     for (const assertion of assertions) {
+      const sel = this.sanitizeString(assertion.selector);
       switch (assertion.type) {
         case 'visible':
-          code += `${indent}self.assertTrue(self.find_element("${assertion.selector}").is_displayed())\n`;
+          code += `${indent}self.assertTrue(self.find_element("${sel}").is_displayed())\n`;
           break;
         case 'value':
-          code += `${indent}self.assertEqual("${this.sanitizeString(assertion.value)}", self.find_element("${assertion.selector}").get_attribute("value"))\n`;
+          code += `${indent}self.assertEqual("${this.sanitizeString(assertion.value)}", self.find_element("${sel}").get_attribute("value"))\n`;
           break;
         case 'text':
-          code += `${indent}self.assertIn("${this.sanitizeString(assertion.expected)}", self.find_element("${assertion.selector}").text)\n`;
+          code += `${indent}self.assertIn("${this.sanitizeString(assertion.expected)}", self.find_element("${sel}").text)\n`;
           break;
       }
     }
@@ -808,9 +896,9 @@ const assert = require('assert');
     const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
     script += `        await driver.get('${startUrl}');\n\n`;
 
-    for (const action of actions) {
-      script += this.generateJSAction(action, options);
-    }
+    this.stripStartAction(actions).forEach((action, i) => {
+      script += this.generateJSAction(action, options, i);
+    });
 
     script += `    } finally {
         await driver.quit();
@@ -821,25 +909,51 @@ const assert = require('assert');
     return script;
   }
 
-  generateJSAction(action, options) {
+  generateJSAction(action, options, index = 0) {
     let code = '';
     const indent = '        ';
+    // Suffix declared locals with the action index so repeated inputs/selects
+    // don't redeclare a const in the same function scope.
+    const v = `_${index}`;
+
+    // Enter the recorded iframe before the action, restore default content after.
+    const frameSel = this.iframeSelector(action.iframe);
+    if (frameSel) {
+      code += `${indent}await driver.switchTo().frame(await driver.findElement(By.css('${frameSel}')));\n`;
+    }
 
     switch (action.type) {
+      case 'navigate':
+        code += `${indent}await driver.get('${this.sanitizeString(action.url)}');\n`;
+        break;
+
       case 'click':
         code += `${indent}await driver.findElement(By.css('${this.generateSelector(action.target)}')).click();\n`;
         break;
 
-      case 'input':
-        code += `${indent}const inputElement = await driver.findElement(By.css('${this.generateSelector(action.target)}'));\n`;
-        code += `${indent}await inputElement.clear();\n`;
-        code += `${indent}await inputElement.sendKeys('${this.sanitizeString(action.value)}');\n`;
+      case 'input': {
+        const isSensitive = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
+        code += `${indent}const inputElement${v} = await driver.findElement(By.css('${this.generateSelector(action.target)}'));\n`;
+        code += `${indent}await inputElement${v}.clear();\n`;
+        if (isSensitive) {
+          code += `${indent}// TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `${indent}await inputElement${v}.sendKeys(process.env.TEST_PASSWORD || '');\n`;
+        } else {
+          code += `${indent}await inputElement${v}.sendKeys('${this.sanitizeString(action.value)}');\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `${indent}const select = await driver.findElement(By.css('${this.generateSelector(action.target)}'));\n`;
-          code += `${indent}await select.findElement(By.css('option[value="${action.value}"]')).click();\n`;
+          code += `${indent}const select${v} = await driver.findElement(By.css('${this.generateSelector(action.target)}'));\n`;
+          code += `${indent}await select${v}.findElement(By.css('option[value="${this.sanitizeString(action.value)}"]')).click();\n`;
+        } else if (action.checked !== undefined) {
+          code += `${indent}const checkbox${v} = await driver.findElement(By.css('${this.generateSelector(action.target)}'));\n`;
+          code += `${indent}if (await checkbox${v}.isSelected() !== ${action.checked}) {\n`;
+          code += `${indent}    await checkbox${v}.click();\n`;
+          code += `${indent}}\n`;
         }
         break;
 
@@ -848,6 +962,10 @@ const assert = require('assert');
           code += `${indent}await driver.executeScript('window.scrollTo(${action.position.x}, ${action.position.y})');\n`;
         }
         break;
+    }
+
+    if (frameSel) {
+      code += `${indent}await driver.switchTo().defaultContent();\n`;
     }
 
     // Add explicit wait if there's significant delay (instead of driver.sleep)
@@ -866,6 +984,8 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.Chrome;
 using OpenQA.Selenium.Support.UI;
 using OpenQA.Selenium.Interactions;
+// Requires the DotNetSeleniumExtras.WaitHelpers NuGet package for ExpectedConditions.
+using SeleniumExtras.WaitHelpers;
 using NUnit.Framework;
 
 [TestFixture]
@@ -894,9 +1014,9 @@ public class FlowScribeTest
     const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
     script += `        driver.Navigate().GoToUrl("${startUrl}");\n\n`;
 
-    for (const action of actions) {
-      script += this.generateCSharpAction(action, options);
-    }
+    this.stripStartAction(actions).forEach((action, i) => {
+      script += this.generateCSharpAction(action, options, i);
+    });
 
     script += `    }
 
@@ -933,28 +1053,58 @@ public class FlowScribeTest
     return script;
   }
 
-  generateCSharpAction(action, options) {
+  generateCSharpAction(action, options, index = 0) {
     let code = '';
     const indent = '        ';
+    // Suffix declared locals with the action index so repeated inputs/selects
+    // don't redeclare a variable in the same method scope.
+    const v = `_${index}`;
+
+    // Enter the recorded iframe before the action, restore default content after.
+    const frameSel = this.iframeSelector(action.iframe);
+    if (frameSel) {
+      code += `${indent}driver.SwitchTo().Frame(FindElement("${frameSel}"));\n`;
+    }
 
     switch (action.type) {
+      case 'navigate':
+        code += `${indent}driver.Navigate().GoToUrl("${this.sanitizeString(action.url)}");\n`;
+        break;
+
       case 'click':
         code += `${indent}FindElement("${this.generateSelector(action.target)}").Click();\n`;
         break;
 
-      case 'input':
-        code += `${indent}var inputElement = FindElement("${this.generateSelector(action.target)}");\n`;
-        code += `${indent}inputElement.Clear();\n`;
-        code += `${indent}inputElement.SendKeys("${this.sanitizeString(action.value)}");\n`;
+      case 'input': {
+        const isSensitive = action.target?.type === 'password' ||
+          /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
+        code += `${indent}var inputElement${v} = FindElement("${this.generateSelector(action.target)}");\n`;
+        code += `${indent}inputElement${v}.Clear();\n`;
+        if (isSensitive) {
+          code += `${indent}// TODO: set TEST_PASSWORD env var (value masked for security)\n`;
+          code += `${indent}inputElement${v}.SendKeys(Environment.GetEnvironmentVariable("TEST_PASSWORD") ?? "");\n`;
+        } else {
+          code += `${indent}inputElement${v}.SendKeys("${this.sanitizeString(action.value)}");\n`;
+        }
         break;
+      }
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `${indent}var selectElement = FindElement("${this.generateSelector(action.target)}");\n`;
-          code += `${indent}var select = new SelectElement(selectElement);\n`;
-          code += `${indent}select.SelectByValue("${action.value}");\n`;
+          code += `${indent}var selectElement${v} = FindElement("${this.generateSelector(action.target)}");\n`;
+          code += `${indent}var select${v} = new SelectElement(selectElement${v});\n`;
+          code += `${indent}select${v}.SelectByValue("${this.sanitizeString(action.value)}");\n`;
+        } else if (action.checked !== undefined) {
+          code += `${indent}var checkbox${v} = FindElement("${this.generateSelector(action.target)}");\n`;
+          code += `${indent}if (checkbox${v}.Selected != ${action.checked}) {\n`;
+          code += `${indent}    checkbox${v}.Click();\n`;
+          code += `${indent}}\n`;
         }
         break;
+    }
+
+    if (frameSel) {
+      code += `${indent}driver.SwitchTo().DefaultContent();\n`;
     }
 
     // Add explicit wait if there's significant delay (instead of Thread.Sleep)
@@ -1004,7 +1154,7 @@ describe('FlowScribe Generated Test', () => {
     script += `    cy.visit('${startUrl}');\n`;
     script += `    cy.viewport(1920, 1080);\n\n`;
 
-    for (const action of actions) {
+    for (const action of this.stripStartAction(actions)) {
       if (includeComments && action.pageTitle) {
         script += `    // Page: ${action.pageTitle}\n`;
       }
@@ -1019,17 +1169,26 @@ describe('FlowScribe Generated Test', () => {
   generateAction(action, includeAssertions) {
     let code = '';
 
+    // Query helper: inside an iframe, resolve elements through the
+    // cypress-iframe plugin (cy.iframe().find(...)); otherwise plain cy.get().
+    const frameSel = action.iframe ? this.iframeSelector(action.iframe) : null;
+    const q = (sel) => frameSel ? `cy.iframe('${frameSel}').find('${sel}')` : `cy.get('${sel}')`;
+    if (frameSel) {
+      // Requires the 'cypress-iframe' plugin: import 'cypress-iframe'; in support.
+      code += `    cy.frameLoaded('${frameSel}');\n`;
+    }
+
     switch (action.type) {
       case 'click':
-        code += `    cy.get('${this.generateSelector(action.target)}').click();\n`;
+        code += `    ${q(this.generateSelector(action.target))}.click();\n`;
         break;
 
       case 'double_click':
-        code += `    cy.get('${this.generateSelector(action.target)}').dblclick();\n`;
+        code += `    ${q(this.generateSelector(action.target))}.dblclick();\n`;
         break;
 
       case 'right_click':
-        code += `    cy.get('${this.generateSelector(action.target)}').rightclick();\n`;
+        code += `    ${q(this.generateSelector(action.target))}.rightclick();\n`;
         break;
 
       case 'input': {
@@ -1037,18 +1196,18 @@ describe('FlowScribe Generated Test', () => {
           /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
         if (isSensitiveCy) {
           code += `    // TODO: set TEST_PASSWORD env var (value masked for security)\n`;
-          code += `    cy.get('${this.generateSelector(action.target)}').clear().type(Cypress.env('TEST_PASSWORD') || '');\n`;
+          code += `    ${q(this.generateSelector(action.target))}.clear().type(Cypress.env('TEST_PASSWORD') || '');\n`;
         } else {
-          code += `    cy.get('${this.generateSelector(action.target)}').clear().type('${this.sanitizeString(action.value)}');\n`;
+          code += `    ${q(this.generateSelector(action.target))}.clear().type('${this.sanitizeString(action.value)}');\n`;
         }
         break;
       }
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `    cy.get('${this.generateSelector(action.target)}').select('${action.value}');\n`;
+          code += `    ${q(this.generateSelector(action.target))}.select('${this.sanitizeString(action.value)}');\n`;
         } else if (action.checked !== undefined) {
-          code += `    cy.get('${this.generateSelector(action.target)}').${action.checked ? 'check' : 'uncheck'}();\n`;
+          code += `    ${q(this.generateSelector(action.target))}.${action.checked ? 'check' : 'uncheck'}();\n`;
         }
         break;
 
@@ -1056,20 +1215,20 @@ describe('FlowScribe Generated Test', () => {
         if (action.target === 'document') {
           code += `    cy.window().scrollTo(${action.position.x}, ${action.position.y});\n`;
         } else {
-          code += `    cy.get('${this.generateSelector(action.target)}').scrollIntoView();\n`;
+          code += `    ${q(this.generateSelector(action.target))}.scrollIntoView();\n`;
         }
         break;
 
       case 'hover':
-        code += `    cy.get('${this.generateSelector(action.target)}').trigger('mouseover');\n`;
+        code += `    ${q(this.generateSelector(action.target))}.trigger('mouseover');\n`;
         break;
 
       case 'drag-drop':
-        code += `    cy.get('${this.generateSelector(action.source.element)}').drag('${this.generateSelector(action.target)}');\n`;
+        code += `    ${q(this.generateSelector(action.source.element))}.drag('${this.generateSelector(action.target)}');\n`;
         break;
 
       case 'file_upload':
-        code += `    cy.get('${this.generateSelector(action.target)}').selectFile('path/to/${action.files[0].name}');\n`;
+        code += `    ${q(this.generateSelector(action.target))}.selectFile('path/to/${action.files[0].name}');\n`;
         break;
 
       case 'key_down':
@@ -1098,22 +1257,23 @@ describe('FlowScribe Generated Test', () => {
     let code = '';
 
     for (const assertion of assertions) {
+      const sel = this.sanitizeString(assertion.selector);
       switch (assertion.type) {
         case 'visible':
-          code += `    cy.get('${assertion.selector}').should('be.visible');\n`;
+          code += `    cy.get('${sel}').should('be.visible');\n`;
           break;
         case 'value':
-          code += `    cy.get('${assertion.selector}').should('have.value', '${this.sanitizeString(assertion.value)}');\n`;
+          code += `    cy.get('${sel}').should('have.value', '${this.sanitizeString(assertion.value)}');\n`;
           break;
         case 'text':
-          code += `    cy.get('${assertion.selector}').should('contain', '${this.sanitizeString(assertion.expected)}');\n`;
+          code += `    cy.get('${sel}').should('contain', '${this.sanitizeString(assertion.expected)}');\n`;
           break;
         case 'attribute':
-          code += `    cy.get('${assertion.selector}').should('have.attr', '${assertion.attribute}', '${assertion.value}');\n`;
+          code += `    cy.get('${sel}').should('have.attr', '${this.sanitizeString(assertion.attribute)}', '${this.sanitizeString(assertion.value)}');\n`;
           break;
         case 'has_class':
           assertion.classes.forEach(cls => {
-            code += `    cy.get('${assertion.selector}').should('have.class', '${cls}');\n`;
+            code += `    cy.get('${sel}').should('have.class', '${this.sanitizeString(cls)}');\n`;
           });
           break;
         case 'url':
@@ -1182,7 +1342,7 @@ const assert = require('assert');
     const startUrl = actions.find(a => a.url)?.url || 'https://example.com';
     script += `    await page.goto('${startUrl}', { waitUntil: 'networkidle2' });\n\n`;
 
-    for (const action of actions) {
+    for (const action of this.stripStartAction(actions)) {
       if (includeComments && action.pageTitle) {
         script += `    // Page: ${action.pageTitle}\n`;
       }
@@ -1196,9 +1356,22 @@ const assert = require('assert');
   generateAction(action, includeAssertions) {
     let code = '';
 
+    // Inside an iframe, resolve the frame from its element handle and run
+    // element actions against `frame` instead of `page`.
+    const frameSel = action.iframe ? this.iframeSelector(action.iframe) : null;
+    const ctx = frameSel ? 'frame' : 'page';
+    if (frameSel) {
+      code += `    const frameEl = await page.$('${frameSel}');\n`;
+      code += `    const frame = await frameEl.contentFrame();\n`;
+    }
+
     switch (action.type) {
+      case 'navigate':
+        code += `    await page.goto('${this.sanitizeString(action.url)}', { waitUntil: 'networkidle2' });\n`;
+        break;
+
       case 'click':
-        code += `    await page.click('${this.generateSelector(action.target)}');\n`;
+        code += `    await ${ctx}.click('${this.generateSelector(action.target)}');\n`;
         if (action.assertions?.some(a => a.type === 'url_change')) {
           code += `    await page.waitForNavigation();\n`;
         }
@@ -1209,16 +1382,21 @@ const assert = require('assert');
           /pass(word)?|secret|token|key|auth/i.test(action.target?.name || action.target?.id || '');
         if (isSensitivePup) {
           code += `    // TODO: set TEST_PASSWORD env var (value masked for security)\n`;
-          code += `    await page.type('${this.generateSelector(action.target)}', process.env.TEST_PASSWORD || '');\n`;
+          code += `    await ${ctx}.type('${this.generateSelector(action.target)}', process.env.TEST_PASSWORD || '');\n`;
         } else {
-          code += `    await page.type('${this.generateSelector(action.target)}', '${this.sanitizeString(action.value)}');\n`;
+          code += `    await ${ctx}.type('${this.generateSelector(action.target)}', '${this.sanitizeString(action.value)}');\n`;
         }
         break;
       }
 
       case 'change':
         if (action.target.tagName === 'select') {
-          code += `    await page.select('${this.generateSelector(action.target)}', '${action.value}');\n`;
+          code += `    await ${ctx}.select('${this.generateSelector(action.target)}', '${this.sanitizeString(action.value)}');\n`;
+        } else if (action.checked !== undefined) {
+          const sel = this.generateSelector(action.target);
+          code += `    if ((await ${ctx}.$eval('${sel}', el => el.checked)) !== ${action.checked}) {\n`;
+          code += `      await ${ctx}.click('${sel}');\n`;
+          code += `    }\n`;
         }
         break;
 
@@ -1229,7 +1407,7 @@ const assert = require('assert');
         break;
 
       case 'hover':
-        code += `    await page.hover('${this.generateSelector(action.target)}');\n`;
+        code += `    await ${ctx}.hover('${this.generateSelector(action.target)}');\n`;
         break;
 
       case 'key_down':
@@ -1254,16 +1432,17 @@ const assert = require('assert');
     let code = '';
 
     for (const assertion of assertions) {
+      const sel = this.sanitizeString(assertion.selector);
       switch (assertion.type) {
         case 'visible':
-          code += `    await page.waitForSelector('${assertion.selector}', { visible: true });\n`;
+          code += `    await page.waitForSelector('${sel}', { visible: true });\n`;
           break;
         case 'value':
-          code += `    const value = await page.$eval('${assertion.selector}', el => el.value);\n`;
+          code += `    const value = await page.$eval('${sel}', el => el.value);\n`;
           code += `    assert.equal(value, '${this.sanitizeString(assertion.value)}');\n`;
           break;
         case 'text':
-          code += `    const text = await page.$eval('${assertion.selector}', el => el.textContent);\n`;
+          code += `    const text = await page.$eval('${sel}', el => el.textContent);\n`;
           code += `    assert(text.includes('${this.sanitizeString(assertion.expected)}'));\n`;
           break;
       }

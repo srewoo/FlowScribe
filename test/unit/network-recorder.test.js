@@ -245,11 +245,23 @@ describe('NetworkRecorder', () => {
     test('lowercases header names', () => {
       const headers = [
         { name: 'Content-Type', value: 'application/json' },
-        { name: 'Authorization', value: 'Bearer token' }
+        { name: 'Accept', value: 'text/html' }
       ];
       const result = recorder.parseHeaders(headers);
       expect(result['content-type']).toBe('application/json');
-      expect(result['authorization']).toBe('Bearer token');
+      expect(result['accept']).toBe('text/html');
+    });
+
+    test('redacts sensitive headers', () => {
+      const headers = [
+        { name: 'Authorization', value: 'Bearer secret-token' },
+        { name: 'Cookie', value: 'session=abc123' },
+        { name: 'X-Api-Key', value: 'sk-12345' }
+      ];
+      const result = recorder.parseHeaders(headers);
+      expect(result['authorization']).toBe('***REDACTED***');
+      expect(result['cookie']).toBe('***REDACTED***');
+      expect(result['x-api-key']).toBe('***REDACTED***');
     });
   });
 });

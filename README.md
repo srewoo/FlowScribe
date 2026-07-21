@@ -17,7 +17,7 @@ This extension has been **completely refactored** for better maintainability:
 ### 🤖 AI-Powered Recording
 - **Smart Element Detection**: Automatically identifies the best selectors for reliable test automation
 - **Context-Aware Recording**: Understands user intent and generates meaningful test steps
-- **Self-Healing Scripts**: Creates robust scripts that adapt to UI changes
+- **Optional AI Enhancement**: Bring your own OpenAI, Anthropic, or Google AI key to refine generated scripts
 
 ### 🎯 Multi-Framework Support
 - **Playwright** (TypeScript/JavaScript)
@@ -26,8 +26,7 @@ This extension has been **completely refactored** for better maintainability:
 - **Puppeteer** (JavaScript)
 
 ### 🔧 Advanced Capabilities
-- **Visual AI Engine**: Screenshot-based element detection and validation
-- **Network Monitoring**: Capture and validate API requests/responses
+- **Network Monitoring**: Capture and validate API requests/responses (sensitive headers redacted)
 - **Page Object Generation**: Automatically create maintainable page object models
 - **Cross-Frame Recording**: Works seamlessly with iframes and complex SPAs
 
@@ -50,7 +49,7 @@ This extension has been **completely refactored** for better maintainability:
    - Open Chrome and go to `chrome://extensions/`
    - Enable "Developer mode" (toggle in top right)
    - Click "Load unpacked"
-   - Select the `dist` folder from your project directory
+   - Select the `dist-chrome` folder from your project directory
 
 4. Verify installation:
    - You should see the FlowScribe icon (🎯 FS) in your Chrome toolbar
@@ -63,8 +62,8 @@ The extension will be available on the Chrome Web Store once published.
 
 ### First Test Recording
 
-1. **Open Test Page**: Open [test-page.html](./test-page.html) in your browser for practice
-   
+1. **Open any web page** you want to practice on (a login form or to-do app works well)
+
 2. **Start Recording**: 
    - Click the FlowScribe icon in your toolbar
    - Select your preferred framework (Playwright, Selenium, Cypress, or Puppeteer)
@@ -104,18 +103,18 @@ The extension will be available on the Chrome Web Store once published.
 8. Click "Generate Script" to create your test code
 
 ### Advanced Features
-- **Element Inspector**: Analyze elements and preview optimal selectors
-- **Script Editor**: Edit and enhance generated scripts with AI assistance
-- **Test Execution**: Run tests directly from the extension
-- **Reports**: View detailed execution results and performance metrics
+- **Element Inspector**: Pick any element on the page and preview the selector FlowScribe would use
+- **AI Script Enhancement**: Optionally refine generated scripts with your own AI provider key
+- **Network Capture**: Record API calls and generate mocks for your framework
+- **Page Object Models**: Generate maintainable page object classes alongside your test
 
 ## ⚙️ Configuration
 
 ### AI Settings
 Configure your preferred AI provider in Settings:
-- **OpenAI**: GPT-4, GPT-3.5-turbo
-- **Anthropic**: Claude-3, Claude-2
-- **Google AI**: Gemini Pro, Gemini Pro Vision
+- **OpenAI**: GPT-4.1, GPT-4.1-mini, GPT-4.1-nano
+- **Anthropic**: Claude Sonnet 4.5, Claude Haiku 4.5
+- **Google AI**: Gemini 2.5 Pro, Gemini 2.5 Flash, Gemini 2.0 Flash
 
 ### Recording Preferences
 - Auto-scroll to elements
@@ -132,16 +131,17 @@ Configure your preferred AI provider in Settings:
 ## 🔐 Privacy & Security
 
 FlowScribe is designed with privacy as a core principle:
-- **Local Processing**: Recordings are processed locally when possible
-- **Encrypted Storage**: All data is encrypted before storage
-- **Minimal Data Collection**: Only essential data for functionality
-- **User Control**: You decide what data to share with AI services
+- **Local Processing**: Recordings stay in your browser's local storage; nothing is sent anywhere unless you enable AI enhancement
+- **Encrypted API Key**: Your AI provider API key is encrypted (AES-GCM) before being stored
+- **Sensitive Data Masking**: Password/token fields and sensitive network headers are masked/redacted at capture
+- **Minimal Data Collection**: No telemetry; only what's needed to record and generate scripts
+- **User Control**: You decide whether to send any data to an AI service, using your own key
 
-[Read our full Privacy Policy](src/extension/popup/privacy-policy.html)
+[Read our full Privacy Policy](src/extension/pages/privacy-policy.html)
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Open an issue or pull request on GitHub to get started.
 
 ### Development Setup
 ```bash
@@ -155,36 +155,26 @@ npm install
 # Build the extension
 npm run build
 
-# The built extension will be in the 'dist' folder
+# The built extension will be in the 'dist-chrome' folder
 # Load it in Chrome using chrome://extensions/
 ```
 
 ### Project Structure
 ```
+manifest.json          # MV3 manifest (extension root)
 src/
-├── extension/          # Extension manifest and icons
-│   ├── manifest.json
-│   └── icons/
-├── content/           # Content script for recording
-│   └── content.js
-├── background/        # Service worker for processing
-│   └── background.js
-├── popup/            # Extension popup UI
-│   ├── popup.html
-│   ├── popup.css
-│   └── popup.js
-└── utils/            # Shared utilities
+├── background/        # Service worker: sessions, AI orchestration, storage
+├── content/           # In-page recorder + element picker
+├── popup/             # Extension popup UI (record / assertions / history)
+├── generators/        # Framework-specific test-script emitters
+├── pom/               # Page Object Model generator
+├── network/           # Network request recorder
+└── utils/             # Shared utilities (AI service, wait strategy, logger)
 
-dist/                 # Built extension (ready for Chrome)
-test-page.html       # Test page for trying FlowScribe
+dist-chrome/           # Built extension (ready to load in Chrome)
 ```
 
-## 📚 Documentation
-
-- [User Guide](docs/user-guide.md)
-- [API Reference](docs/api-reference.md)
-- [Framework Integration](docs/framework-integration.md)
-- [Troubleshooting](docs/troubleshooting.md)
+In-app help is available from the popup's ⚙️ menu (Help & Privacy Policy).
 
 ## 🐛 Issues & Support
 

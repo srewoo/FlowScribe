@@ -1,13 +1,13 @@
 {
   "name": "flowscribe",
-  "version": "4.0",
-  "description": "Navigation to Automation",
+  "version": "5.0",
+  "description": "Record browser clicks and generate Playwright, Selenium, Cypress & Puppeteer end-to-end test scripts. No code required.",
   "main": "manifest.json",
   "scripts": {
     "build": " webpack --mode=production",
     "package": "npm run build && node scripts/create-zip.js",
     "dev": "BROWSER=chrome webpack --mode=development --watch",
-    "clean": "rimraf dist-chrome dist-firefox dist-edge package",
+    "clean": "rimraf dist-chrome",
     "test": "jest"
   },
   "keywords": [

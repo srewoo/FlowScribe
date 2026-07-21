@@ -7,6 +7,9 @@ import { WaitStrategyEngine } from '../utils/wait-strategy.js';
 import { EnhancedLocatorPromptGenerator } from '../ai/prompt-templates/enhanced-locator-prompt.js';
 import { NetworkRecorder } from '../network/network-recorder.js';
 import PageObjectGenerator from '../pom/page-object-generator.js';
+import { validateGeneratedScript, hardInvalidReason, stripCodeFences } from '../utils/script-validator.js';
+import { optimizeActions } from '../utils/action-optimizer.js';
+import * as SessionActions from '../utils/session-actions.js';
 
 // Debug mode - set to false for production
 const DEBUG_MODE = false;
@@ -30,6 +33,8 @@ class FlowScribeBackground {
     this.sessionHistory = [];
     this.cryptoKey = null; // AES-GCM encryption key
     this.aiUsageStats = { callCount: 0, lastWarningTime: 0 }; // Track AI usage for warnings
+    this.sidePanelTabs = new Set(); // Tabs where the user explicitly opened the side panel
+    this.genAbort = null; // AbortController for the in-flight AI generation (cancellable)
 
     // Batch processing constants
     this.BATCH_THRESHOLD = 100;          // Actions count to trigger batch processing
@@ -48,7 +53,16 @@ class FlowScribeBackground {
     // Page Object Model generator
     this.pageObjectGenerator = new PageObjectGenerator();
 
-    this.init();
+    // Register the toolbar-icon handler SYNCHRONOUSLY during initial service
+    // worker evaluation. chrome.sidePanel.open() only works while the user
+    // gesture is active, which is lost if the listener is added after an await
+    // in init(). Must run before any async work.
+    this.setupActionClickHandler();
+
+    // Gate action handling until init (incl. session rehydration) completes.
+    // The MV3 service worker can be torn down mid-recording and woken by an
+    // incoming message; handlers await this before touching session state.
+    this.ready = this.init();
   }
 
   /**
@@ -57,32 +71,57 @@ class FlowScribeBackground {
    */
   async initCryptoKey() {
     try {
-      const stored = await chrome.storage.local.get(['flowScribeCryptoKey']);
+      // Derive the AES-GCM key at runtime via PBKDF2 instead of storing a raw
+      // key. Only a non-secret random salt is persisted, so a storage.local
+      // dump no longer contains the decryption key itself. (Client-side storage
+      // can never fully protect a local secret, but this removes the trivial
+      // "key sitting next to the ciphertext" exposure.)
+      const stored = await chrome.storage.local.get(['flowScribeKeySalt', 'flowScribeCryptoKey']);
 
+      // Backward compatibility: keys saved under the previous scheme were
+      // encrypted with this raw key. Keep it available as a decryption fallback
+      // (do NOT delete it) so existing API keys still decrypt; new saves use the
+      // derived key below. Once the user re-saves, their key moves to the
+      // derived scheme automatically.
+      this.legacyCryptoKey = null;
       if (stored.flowScribeCryptoKey) {
-        // Import existing key
-        const keyData = new Uint8Array(stored.flowScribeCryptoKey);
-        this.cryptoKey = await crypto.subtle.importKey(
-          'raw',
-          keyData,
-          { name: 'AES-GCM', length: 256 },
-          false,
-          ['encrypt', 'decrypt']
-        );
-      } else {
-        // Generate new key
-        this.cryptoKey = await crypto.subtle.generateKey(
-          { name: 'AES-GCM', length: 256 },
-          true,
-          ['encrypt', 'decrypt']
-        );
-        // Export and store key
-        const exportedKey = await crypto.subtle.exportKey('raw', this.cryptoKey);
-        await chrome.storage.local.set({
-          flowScribeCryptoKey: Array.from(new Uint8Array(exportedKey))
-        });
+        try {
+          this.legacyCryptoKey = await crypto.subtle.importKey(
+            'raw',
+            new Uint8Array(stored.flowScribeCryptoKey),
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['decrypt']
+          );
+        } catch (e) { /* ignore malformed legacy key */ }
       }
-      Logger.log('🔐 Crypto key initialized');
+
+      let salt;
+      if (stored.flowScribeKeySalt) {
+        salt = new Uint8Array(stored.flowScribeKeySalt);
+      } else {
+        salt = crypto.getRandomValues(new Uint8Array(16));
+        await chrome.storage.local.set({ flowScribeKeySalt: Array.from(salt) });
+      }
+
+      // Per-install derivation material: extension id (stable) + salt.
+      const material = `flowscribe:${chrome.runtime?.id || 'local'}`;
+      const baseKey = await crypto.subtle.importKey(
+        'raw',
+        new TextEncoder().encode(material),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveKey']
+      );
+
+      this.cryptoKey = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+        baseKey,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      );
+      Logger.log('🔐 Crypto key derived');
     } catch (error) {
       Logger.error('Failed to initialize crypto key:', error);
       // Fallback: create in-memory key (won't persist across restarts)
@@ -152,7 +191,19 @@ class FlowScribeBackground {
       const decoder = new TextDecoder();
       return decoder.decode(decrypted);
     } catch (error) {
-      // Try legacy XOR decryption for backward compatibility
+      // Fallback 1: the previous raw-key AES scheme (pre-derived-key upgrade).
+      if (this.legacyCryptoKey) {
+        try {
+          const combined = new Uint8Array(atob(encryptedBase64).split('').map(c => c.charCodeAt(0)));
+          const decrypted = await crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: combined.slice(0, 12) },
+            this.legacyCryptoKey,
+            combined.slice(12)
+          );
+          return new TextDecoder().decode(decrypted);
+        } catch (e) { /* fall through to XOR */ }
+      }
+      // Fallback 2: the oldest XOR-obfuscation format.
       Logger.warn('AES decryption failed, trying legacy format...');
       return this.deobfuscateLegacyKey(encryptedBase64);
     }
@@ -177,10 +228,12 @@ class FlowScribeBackground {
     await this.initCryptoKey(); // Initialize encryption first
     await this.loadSettings();
     await this.loadSessionHistory();
+    await this.restoreSessions(); // Rehydrate active recording state after SW wake
     await this.initializeAI();
     this.setupMessageHandlers();
+    // Note: setupActionClickHandler() is registered synchronously in the
+    // constructor (required for chrome.sidePanel.open to keep the user gesture).
     this.setupTabHandlers();
-    this.setupActionClickHandler();
     Logger.log('FlowScribe background service worker loaded');
   }
 
@@ -189,29 +242,66 @@ class FlowScribeBackground {
    * (No default_popup so this fires on icon click)
    */
   setupActionClickHandler() {
-    chrome.action.onClicked.addListener(async (tab) => {
-      try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
-      } catch (error) {
-        Logger.warn('Could not toggle panel, injecting content script first:', error.message);
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content.js']
-          });
-          // Retry after injection
-          setTimeout(async () => {
-            try {
-              await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_PANEL' });
-            } catch (e) {
-              Logger.error('Failed to toggle panel after injection:', e.message);
-            }
-          }, 300);
-        } catch (injectError) {
-          Logger.error('Cannot inject content script:', injectError.message);
-        }
+    // Primary UI is Chrome's native side panel, opened ONLY for the tab the
+    // user clicked on (no manifest default_path, so it is disabled on every
+    // other tab). The in-page floating panel is still available via the
+    // "Dock in page" button inside the panel (TOGGLE_PANEL message).
+    chrome.action.onClicked.addListener((tab) => {
+      if (!tab?.id) return;
+      const tabId = tab.id;
+
+      // Browsers without the side panel API (e.g. Firefox) → in-page panel.
+      if (!chrome.sidePanel?.open) {
+        this.toggleInPagePanel(tabId);
+        return;
       }
+
+      // IMPORTANT: open() must be invoked synchronously within this user-gesture
+      // callback — do NOT await anything before it, or Chrome rejects the call.
+      // The path comes from manifest side_panel.default_path, so open() is valid
+      // immediately.
+      chrome.sidePanel.open({ tabId })
+        .then(() => {
+          this.sidePanelTabs.add(tabId);
+          chrome.sidePanel.setOptions({ tabId, path: 'popup.html', enabled: true }).catch(() => {});
+        })
+        .catch((error) => {
+          Logger.warn('Side panel open failed, using in-page panel:', error?.message);
+          this.toggleInPagePanel(tabId);
+        });
     });
+
+    // Keep the panel strictly tab-scoped: it stays enabled only on tabs where
+    // the user opened it, and is disabled everywhere else so switching tabs
+    // doesn't surface it globally.
+    chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+      if (!chrome.sidePanel?.setOptions) return;
+      try {
+        if (this.sidePanelTabs.has(tabId)) {
+          await chrome.sidePanel.setOptions({ tabId, path: 'popup.html', enabled: true });
+        } else {
+          await chrome.sidePanel.setOptions({ tabId, enabled: false });
+        }
+      } catch (e) { /* tab may not support side panel; ignore */ }
+    });
+
+    // Forget closed tabs.
+    chrome.tabs.onRemoved.addListener((tabId) => this.sidePanelTabs.delete(tabId));
+  }
+
+  // Show/hide the in-page floating panel, injecting the content script first
+  // if it isn't present on the page yet.
+  async toggleInPagePanel(tabId) {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_PANEL' });
+    } catch (e) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+        setTimeout(() => chrome.tabs.sendMessage(tabId, { type: 'TOGGLE_PANEL' }).catch(() => {}), 300);
+      } catch (injectError) {
+        Logger.error('Cannot inject content script:', injectError.message);
+      }
+    }
   }
 
   async loadSettings() {
@@ -232,7 +322,6 @@ class FlowScribeBackground {
         includeAssertions: true,
         addComments: true,
         theme: 'light',
-        enableSelfHealing: true,
         enableNetworkRecording: true,
         enablePOMGeneration: true,
       };
@@ -255,7 +344,6 @@ class FlowScribeBackground {
         includeAssertions: true,
         addComments: true,
         theme: 'light',
-        enableSelfHealing: true,
         enableNetworkRecording: true,
         enablePOMGeneration: true,
       };
@@ -267,6 +355,56 @@ class FlowScribeBackground {
       await chrome.storage.local.set({ flowScribeSettings: this.settings });
     } catch (error) {
       Logger.error('Failed to save settings:', error);
+    }
+  }
+
+  /**
+   * Storage area for live session state. Prefer chrome.storage.session
+   * (in-memory, cleared on browser restart) and fall back to local.
+   */
+  getSessionStore() {
+    return (chrome.storage && chrome.storage.session) || chrome.storage.local;
+  }
+
+  /**
+   * Persist active recording state so it survives MV3 service-worker
+   * termination. Maps are serialized to arrays of entries. Fire-and-forget:
+   * callers should not block message handling on this.
+   */
+  async persistSessions() {
+    try {
+      const snapshot = {
+        sessions: Array.from(this.sessions.entries()),
+        activeSessionsByTab: Array.from(this.activeSessionsByTab.entries()),
+        currentSessionId: this.currentSessionId
+      };
+      await this.getSessionStore().set({ flowScribeActiveSessions: snapshot });
+    } catch (error) {
+      Logger.warn('Failed to persist sessions:', error?.message);
+    }
+  }
+
+  /**
+   * Rehydrate active recording state written by persistSessions(). Only fills
+   * empty maps so a live in-memory session is never clobbered.
+   */
+  async restoreSessions() {
+    try {
+      const result = await this.getSessionStore().get(['flowScribeActiveSessions']);
+      const snapshot = result.flowScribeActiveSessions;
+      if (!snapshot) return;
+      if (Array.isArray(snapshot.sessions) && this.sessions.size === 0) {
+        this.sessions = new Map(snapshot.sessions);
+      }
+      if (Array.isArray(snapshot.activeSessionsByTab) && this.activeSessionsByTab.size === 0) {
+        this.activeSessionsByTab = new Map(snapshot.activeSessionsByTab);
+      }
+      if (!this.currentSessionId && snapshot.currentSessionId) {
+        this.currentSessionId = snapshot.currentSessionId;
+      }
+      Logger.log('🔄 Active sessions restored:', this.sessions.size);
+    } catch (error) {
+      Logger.warn('Failed to restore sessions:', error?.message);
     }
   }
 
@@ -339,20 +477,29 @@ class FlowScribeBackground {
       }
 
       // Single call for smaller recordings
-      const prompt = this.buildAIPrompt(framework, optimizedActions, options);
+      let prompt = this.buildAIPrompt(framework, optimizedActions, options);
+
+      // Vision-assisted generation: attach page screenshots so the model can
+      // ground selectors, step names and assertions in the actual UI.
+      const images = options.includeScreenshots ? this.getSessionScreenshots() : [];
+      if (images.length) {
+        prompt += `\n\n## PAGE SCREENSHOTS:\n${images.length} screenshot(s) of the visited pages are attached in order. Use them to disambiguate elements, write accurate step descriptions, and add meaningful assertions about visible content.`;
+        Logger.log(`🖼️ Attaching ${images.length} screenshot(s) to the ${provider} request`);
+      }
+
       const estimatedTokens = this.estimateTokens(prompt);
       Logger.log(`📊 Estimated prompt tokens: ~${estimatedTokens}`);
 
       let response;
       switch (provider) {
         case 'openai':
-          response = await this.callOpenAI(model, prompt);
+          response = await this.callOpenAI(model, prompt, images);
           break;
         case 'anthropic':
-          response = await this.callAnthropic(model, prompt);
+          response = await this.callAnthropic(model, prompt, images);
           break;
         case 'google':
-          response = await this.callGoogleAI(model, prompt);
+          response = await this.callGoogleAI(model, prompt, images);
           break;
         default:
           Logger.warn(`Unknown AI provider: ${provider}`);
@@ -565,7 +712,12 @@ Each action may include a "waitStrategy" field with intelligent wait recommendat
 - NO markdown code blocks, NO explanations
 - NO placeholder comments like "// Add more steps here"
 - Script must be copy-paste ready to run
-- Include descriptive comments for each step${chunkContext}
+- Include ONE descriptive comment per logical step
+## CONCISENESS (critical):
+- Produce ONE fill()/type() per field using its FINAL value — NEVER a step per keystroke
+- Do NOT navigate to the same URL more than once in a row
+- Do NOT repeat or duplicate the flow; emit each recorded action exactly once
+- No redundant re-typing, no re-focusing, keep the script tight${options.includeScreenshots ? '\n- Capture a screenshot after key navigation steps (e.g. after login and after major page loads)' : ''}${options._correction ? `\n## CORRECTION: your previous output was rejected (${options._correction}). Return a corrected, COMPLETE, syntactically valid script.` : ''}${chunkContext}
 
 ${enhanced.userPrompt}
 
@@ -755,6 +907,7 @@ describe('User Flow Test', () => {
     Logger.log(`📊 Split into ${chunks.length} chunks`);
 
     const scriptParts = [];
+    let failedChunks = 0;
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -762,7 +915,15 @@ describe('User Flow Test', () => {
 
       Logger.log(`🔄 Processing chunk ${i + 1}/${chunks.length} (${chunk.length} actions)`);
 
-      const prompt = this.buildAIPrompt(framework, chunk, options, chunkInfo);
+      let prompt = this.buildAIPrompt(framework, chunk, options, chunkInfo);
+
+      // Attach page screenshots to the FIRST chunk only (vision context for the
+      // whole run without paying the image cost on every chunk).
+      const images = (i === 0 && options.includeScreenshots) ? this.getSessionScreenshots() : [];
+      if (images.length) {
+        prompt += `\n\n## PAGE SCREENSHOTS:\n${images.length} screenshot(s) of the visited pages are attached in order. Use them to disambiguate elements and write accurate steps/assertions across all parts.`;
+        Logger.log(`🖼️ Attaching ${images.length} screenshot(s) to chunk 1`);
+      }
 
       let result;
       const provider = this.settings.aiProvider || 'openai';
@@ -770,18 +931,21 @@ describe('User Flow Test', () => {
 
       switch (provider) {
         case 'openai':
-          result = await this.callOpenAI(model, prompt);
+          result = await this.callOpenAI(model, prompt, images);
           break;
         case 'anthropic':
-          result = await this.callAnthropic(model, prompt);
+          result = await this.callAnthropic(model, prompt, images);
           break;
         case 'google':
-          result = await this.callGoogleAI(model, prompt);
+          result = await this.callGoogleAI(model, prompt, images);
           break;
       }
 
       if (result) {
         scriptParts.push(result);
+      } else {
+        failedChunks++;
+        Logger.warn(`⚠️ Chunk ${i + 1}/${chunks.length} returned no result`);
       }
 
       // Exponential backoff between API calls to avoid rate limiting
@@ -789,6 +953,12 @@ describe('User Flow Test', () => {
         const delay = Math.min(this.BATCH_BASE_DELAY * Math.pow(this.BATCH_BACKOFF_FACTOR, i), this.BATCH_MAX_DELAY);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
+    }
+
+    // Fail loudly rather than return a silently truncated script — the caller
+    // will fall back to deterministic template generation.
+    if (failedChunks > 0) {
+      throw new Error(`${failedChunks} of ${chunks.length} AI chunks failed; aborting to avoid a truncated script`);
     }
 
     // Merge script parts
@@ -980,35 +1150,102 @@ describe('User Flow Test', () => {
   }
 
   /**
+   * fetch() with an abort-based timeout and a single retry on network error,
+   * rate-limit (429), or server error (5xx). Prevents a hung provider request
+   * from stalling generation forever.
+   */
+  async fetchWithRetry(url, options, { timeout = 60000, retries = 1 } = {}) {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      // Link the active generation controller so "Stop Generation" aborts this fetch.
+      const onGenAbort = () => controller.abort();
+      if (this.genAbort) this.genAbort.signal.addEventListener('abort', onGenAbort);
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(timer);
+        if (this.genAbort) this.genAbort.signal.removeEventListener('abort', onGenAbort);
+        if ((response.status === 429 || response.status >= 500) && attempt < retries) {
+          lastError = new Error(`HTTP ${response.status}`);
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        return response;
+      } catch (error) {
+        clearTimeout(timer);
+        if (this.genAbort) this.genAbort.signal.removeEventListener('abort', onGenAbort);
+        // If the user cancelled generation, stop immediately (no retry).
+        if (this.genAbort?.signal.aborted) {
+          throw new Error('Generation cancelled');
+        }
+        lastError = error?.name === 'AbortError'
+          ? new Error(`Request timed out after ${timeout}ms`)
+          : error;
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        throw lastError;
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * Call OpenAI API
    */
-  async callOpenAI(model, prompt) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.settings.apiKey}`
+  async callOpenAI(model, prompt, images = []) {
+    const userContent = images.length
+      ? [
+          { type: 'text', text: prompt },
+          ...images.map(url => ({ type: 'image_url', image_url: { url } }))
+        ]
+      : prompt;
+    const messages = [
+      {
+        role: 'system',
+        content: 'You are a test automation expert. Generate clean, production-ready test scripts with comprehensive assertions.'
       },
-      body: JSON.stringify({
-        model: model,
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a test automation expert. Generate clean, production-ready test scripts with comprehensive assertions.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        max_tokens: 8192,
-        temperature: 0.3
-      })
-    });
+      { role: 'user', content: userContent }
+    ];
 
+    // Newer OpenAI models (o-series, gpt-5, and some gpt-4.1 variants) reject
+    // `max_tokens` (require `max_completion_tokens`) and only allow the default
+    // temperature. Build the body accordingly and fall back on that error so
+    // whatever "latest" model the user selected keeps working.
+    const send = (useCompletionTokens) => {
+      const body = { model, messages };
+      if (useCompletionTokens) {
+        body.max_completion_tokens = 8192;
+      } else {
+        body.max_tokens = 8192;
+        body.temperature = 0.3;
+      }
+      return this.fetchWithRetry('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.settings.apiKey}`
+        },
+        body: JSON.stringify(body)
+      });
+    };
+
+    let response = await send(false);
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
+      const msg = error.error?.message || response.statusText || '';
+      // Retry once with the newer parameter shape when the model demands it.
+      if (/max_completion_tokens|max_tokens.*not supported|unsupported parameter/i.test(msg)) {
+        response = await send(true);
+        if (!response.ok) {
+          const err2 = await response.json().catch(() => ({}));
+          throw new Error(`OpenAI API error: ${err2.error?.message || response.statusText}`);
+        }
+      } else {
+        throw new Error(`OpenAI API error: ${msg}`);
+      }
     }
 
     const data = await response.json();
@@ -1018,21 +1255,32 @@ describe('User Flow Test', () => {
   /**
    * Call Anthropic API
    */
-  async callAnthropic(model, prompt) {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+  async callAnthropic(model, prompt, images = []) {
+    const content = images.length
+      ? [
+          { type: 'text', text: prompt },
+          ...images.map(url => ({
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/jpeg', data: url.split(',')[1] }
+          }))
+        ]
+      : prompt;
+    const response = await this.fetchWithRetry('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.settings.apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        // Required for calls originating from a browser/extension context
+        'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: model || 'claude-sonnet-4-5-20250514',
+        model: model || 'claude-sonnet-4-5',
         max_tokens: 8192,
         messages: [
           {
             role: 'user',
-            content: prompt
+            content: content
           }
         ]
       })
@@ -1050,11 +1298,14 @@ describe('User Flow Test', () => {
   /**
    * Call Google AI (Gemini) API
    */
-  async callGoogleAI(model, prompt) {
+  async callGoogleAI(model, prompt, images = []) {
     const geminiModel = model || 'gemini-2.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${this.settings.apiKey}`;
 
-    const response = await fetch(url, {
+    const parts = [{ text: prompt }];
+    images.forEach(u => parts.push({ inline_data: { mime_type: 'image/jpeg', data: u.split(',')[1] } }));
+
+    const response = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -1062,11 +1313,7 @@ describe('User Flow Test', () => {
       body: JSON.stringify({
         contents: [
           {
-            parts: [
-              {
-                text: prompt
-              }
-            ]
+            parts: parts
           }
         ],
         generationConfig: {
@@ -1155,15 +1402,23 @@ describe('User Flow Test', () => {
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true; // Keep channel open for async response
 
-        case 'ACTION_RECORDED':
-          this.handleSingleActionRecorded(message, sender.tab.id);
-          sendResponse({ success: true });
-          break;
+        case 'ACTION_RECORDED': {
+          const recTabId = sender.tab?.id;
+          Promise.resolve(this.ready).then(() => {
+            this.handleSingleActionRecorded(message, recTabId);
+            sendResponse({ success: true });
+          });
+          return true; // Async: rehydrate sessions before storing
+        }
 
-        case 'ACTIONS_RECORDED':
-          this.handleActionsRecorded(message, sender.tab.id);
-          sendResponse({ success: true });
-          break;
+        case 'ACTIONS_RECORDED': {
+          const recTabIds = sender.tab?.id;
+          Promise.resolve(this.ready).then(() => {
+            this.handleActionsRecorded(message, recTabIds);
+            sendResponse({ success: true });
+          });
+          return true; // Async: rehydrate sessions before storing
+        }
 
         case 'GET_SESSION_ACTIONS':
           const sessionForActions = this.sessions.get(this.currentSessionId);
@@ -1224,6 +1479,29 @@ describe('User Flow Test', () => {
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true;
 
+        case 'CLEAR_ACTIONS': {
+          // Popup cleared all actions — mirror it in the stored session so
+          // cleared actions don't reappear on next sync/rehydrate.
+          const clearTabId = message.data?.tabId || sender.tab?.id;
+          Promise.resolve(this.ready).then(() => {
+            this.clearSessionActions(clearTabId);
+            sendResponse({ success: true });
+          });
+          return true;
+        }
+
+        case 'UPDATE_ACTIONS': {
+          // Popup edited the action list (e.g. deleted an action) — replace the
+          // stored session actions with the authoritative list from the popup.
+          const updTabId = message.data?.tabId || sender.tab?.id;
+          const updActions = message.actions || message.data?.actions || [];
+          Promise.resolve(this.ready).then(() => {
+            this.replaceSessionActions(updActions, updTabId);
+            sendResponse({ success: true });
+          });
+          return true;
+        }
+
         case 'CLEAR_SESSIONS':
           this.clearSessions();
           sendResponse({ success: true });
@@ -1232,6 +1510,22 @@ describe('User Flow Test', () => {
         case 'GET_SETTINGS':
           sendResponse({ success: true, settings: this.settings });
           break;
+
+        case 'CANCEL_GENERATION':
+          if (this.genAbort) {
+            try { this.genAbort.abort(); } catch (e) { /* noop */ }
+          }
+          sendResponse({ success: true });
+          break;
+
+        case 'TEST_API_KEY': {
+          const provider = message.data?.provider || message.provider;
+          const apiKey = message.data?.apiKey || message.apiKey;
+          this.testAndListModels(provider, apiKey)
+            .then(result => sendResponse({ success: true, ...result }))
+            .catch(error => sendResponse({ success: false, valid: false, error: error.message }));
+          return true; // async
+        }
 
         case 'GET_SESSION_HISTORY':
           sendResponse({ success: true, history: this.sessionHistory });
@@ -1265,7 +1559,7 @@ describe('User Flow Test', () => {
           return true;
 
         case 'CAPTURE_SCREENSHOT':
-          this.captureScreenshot(sender.tab.id, message.options)
+          this.captureScreenshot(sender.tab?.id, message.options)
             .then(screenshot => sendResponse({ success: true, screenshot }))
             .catch(error => sendResponse({ success: false, error: error.message }));
           return true;
@@ -1291,6 +1585,21 @@ describe('User Flow Test', () => {
   }
 
   setupTabHandlers() {
+    // Multi-tab capture: when a recording tab opens a new tab (e.g. target=_blank),
+    // attach it to the same session so its actions/navigations are captured too.
+    chrome.tabs.onCreated.addListener((tab) => {
+      const openerId = tab.openerTabId;
+      if (openerId == null || tab.id == null) return;
+      const sessionId = this.activeSessionsByTab.get(openerId);
+      if (!sessionId) return;
+      const session = this.sessions.get(sessionId);
+      if (!session || session.status !== 'recording') return;
+      this.activeSessionsByTab.set(tab.id, sessionId);
+      Logger.log('🆕 New tab joined recording session:', tab.id);
+      // The onUpdated 'complete' handler below now owns this tab and will record
+      // its navigation, capture a screenshot, and restore recording.
+    });
+
     // Handle tab updates to track navigation and restore recording
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       // Multi-tab support: look up session by tabId
@@ -1298,10 +1607,11 @@ describe('User Flow Test', () => {
 
       if (sessionId) {
         const session = this.sessions.get(sessionId);
-        if (session && session.tabId === tabId) {
+        if (session && SessionActions.ownsTab(this._sessionStore(), session, tabId)) {
 
-          // Track navigation (TEMPORARILY DISABLED FILTERING - record all navigations)
-          if (changeInfo.url) {
+          // Track navigation, filtering out redirect chains and SPA hash/query
+          // churn so they aren't recorded as discrete user steps.
+          if (changeInfo.url && this.shouldRecordNavigation(changeInfo.url, session.actions)) {
             session.actions.push({
               id: Date.now(),
               type: 'navigation',
@@ -1310,12 +1620,19 @@ describe('User Flow Test', () => {
               title: tab.title || '',
               isUserInitiated: this.isUserInitiatedNavigation(session.actions)
             });
+            this.persistSessions();
             Logger.log('📍 Navigation recorded:', changeInfo.url);
           }
 
           // Auto-restore recording after page loads
           if (changeInfo.status === 'complete' && session.status === 'recording') {
             Logger.log('🔄 Page loaded, restoring recording on:', tab.url);
+
+            // Vision-assisted generation: capture one screenshot per page so the
+            // LLM can see the actual UI (gated by the "Include Screenshots" setting).
+            if (this.settings.includeScreenshots) {
+              this.captureNavigationScreenshot(session, tab.url).catch(() => {});
+            }
 
             // Wait for content script to initialize, then restore recording
             setTimeout(async () => {
@@ -1351,11 +1668,18 @@ describe('User Flow Test', () => {
 
     // Handle tab removal - Multi-tab support
     chrome.tabs.onRemoved.addListener((tabId) => {
-      // Check if tab has an active session
-      if (this.activeSessionsByTab.has(tabId)) {
+      const sessionId = this.activeSessionsByTab.get(tabId);
+      if (sessionId) {
+        const session = this.sessions.get(sessionId);
+        // Closing a SECONDARY tab of a multi-tab session should not end recording —
+        // just detach that tab. Only the session's primary tab closing stops it.
+        if (session && session.tabId !== tabId) {
+          this.activeSessionsByTab.delete(tabId);
+          Logger.log('➖ Secondary tab left recording session:', tabId);
+          return;
+        }
         this.stopRecordingSession(tabId);
       } else if (this.currentSessionId) {
-        // Fallback for legacy single-session mode
         const session = this.sessions.get(this.currentSessionId);
         if (session && session.tabId === tabId) {
           this.stopRecordingSession(tabId);
@@ -1425,6 +1749,7 @@ describe('User Flow Test', () => {
       }
     }
 
+    await this.persistSessions(); // survive SW termination
     return sessionId;
   }
 
@@ -1499,6 +1824,8 @@ describe('User Flow Test', () => {
     if (this.currentSessionId === sessionId) {
       this.currentSessionId = null;
     }
+
+    await this.persistSessions(); // reflect completed/cleared state
 
     // Stop visual indicator in content script
     try {
@@ -1604,48 +1931,137 @@ describe('User Flow Test', () => {
     return hasRecentClick;
   }
 
+  // Lightweight view of session state passed to the pure SessionActions helpers.
+  _sessionStore() {
+    return {
+      sessions: this.sessions,
+      activeSessionsByTab: this.activeSessionsByTab,
+      currentSessionId: this.currentSessionId
+    };
+  }
+
   handleSingleActionRecorded(message, tabId) {
-    // Multi-tab support: look up session by tabId first
-    let sessionId = this.activeSessionsByTab.get(tabId);
-
-    // Fallback to currentSessionId if tab-specific lookup fails
-    if (!sessionId) {
-      sessionId = this.currentSessionId;
-    }
-
-    if (!sessionId) return;
-
-    const session = this.sessions.get(sessionId);
-    if (session && session.tabId === tabId) {
-      session.actions.push(message.action);
-      Logger.log('💾 Action stored in session:', {
-        type: message.action.type,
-        totalSessionActions: session.actions.length,
-        url: message.url,
-        sessionId: sessionId
-      });
+    if (SessionActions.appendAction(this._sessionStore(), message.action, tabId)) {
+      this.persistSessions(); // survive SW termination
+      Logger.log('💾 Action stored in session:', message.action?.type);
     }
   }
 
   handleActionsRecorded(message, tabId) {
-    // Multi-tab support: look up session by tabId first
-    let sessionId = this.activeSessionsByTab.get(tabId);
-
-    // Fallback to currentSessionId if tab-specific lookup fails
-    if (!sessionId) {
-      sessionId = this.currentSessionId;
+    if (SessionActions.appendActions(this._sessionStore(), message.actions, tabId)) {
+      this.persistSessions(); // survive SW termination
+      Logger.log('💾 Multiple actions stored in session:', message.actions?.length);
     }
+  }
 
-    if (!sessionId) return;
+  // Curated "latest models" per provider, used when the live models API is
+  // unavailable or returns nothing. Newest first (index 0 = auto-selected).
+  curatedModels(provider) {
+    const lists = {
+      openai: [
+        { value: 'gpt-4.1', label: 'GPT-4.1 (Latest)' },
+        { value: 'gpt-4.1-mini', label: 'GPT-4.1 Mini' },
+        { value: 'gpt-4.1-nano', label: 'GPT-4.1 Nano' }
+      ],
+      anthropic: [
+        { value: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5 (Latest)' },
+        { value: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' }
+      ],
+      google: [
+        { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Latest)' },
+        { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+        { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' }
+      ]
+    };
+    return lists[provider] || [];
+  }
 
-    const session = this.sessions.get(sessionId);
-    if (session && session.tabId === tabId) {
-      session.actions.push(...message.actions);
-      Logger.log('💾 Multiple actions stored in session:', {
-        newActions: message.actions.length,
-        totalSessionActions: session.actions.length,
-        sessionId: sessionId
-      });
+  async timedFetch(url, options = {}, timeout = 15000) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeout);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  // Validate an API key by hitting the provider's models endpoint, and return
+  // the live model list (newest first) so the UI can populate dynamically.
+  // Falls back to the curated list when the provider has no usable list API.
+  async testAndListModels(provider, apiKey) {
+    if (!apiKey || apiKey.trim().length < 8) {
+      return { valid: false, error: 'Enter a valid API key' };
+    }
+    try {
+      if (provider === 'openai') {
+        const res = await this.timedFetch('https://api.openai.com/v1/models', {
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        if (!res.ok) return { valid: false, error: `OpenAI rejected the key (HTTP ${res.status})` };
+        const data = await res.json();
+        const models = (data.data || [])
+          .map(m => m.id)
+          .filter(id => /^(gpt-|o\d|chatgpt)/i.test(id) &&
+            !/audio|realtime|transcribe|image|tts|embed|moderation|search|vision-preview/i.test(id))
+          .sort().reverse()
+          .map(id => ({ value: id, label: id }));
+        return { valid: true, models: models.length ? models : this.curatedModels('openai') };
+      }
+
+      if (provider === 'anthropic') {
+        const res = await this.timedFetch('https://api.anthropic.com/v1/models', {
+          headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          }
+        });
+        if (!res.ok) return { valid: false, error: `Anthropic rejected the key (HTTP ${res.status})` };
+        const data = await res.json();
+        const models = (data.data || [])
+          .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+          .map(m => ({ value: m.id, label: m.display_name || m.id }));
+        return { valid: true, models: models.length ? models : this.curatedModels('anthropic') };
+      }
+
+      if (provider === 'google') {
+        const res = await this.timedFetch(
+          `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+        );
+        if (!res.ok) return { valid: false, error: `Google rejected the key (HTTP ${res.status})` };
+        const data = await res.json();
+        const models = (data.models || [])
+          .filter(m => (m.supportedGenerationMethods || []).includes('generateContent') && /gemini/i.test(m.name))
+          .map(m => String(m.name).replace('models/', ''))
+          .sort().reverse()
+          .map(id => ({ value: id, label: id }));
+        return { valid: true, models: models.length ? models : this.curatedModels('google') };
+      }
+
+      return { valid: false, error: 'Unknown provider' };
+    } catch (error) {
+      return { valid: false, error: error.name === 'AbortError' ? 'Request timed out' : error.message };
+    }
+  }
+
+  // Resolve the recording session for a tab, falling back to the current
+  // single-session id (popup messages carry no tabId).
+  resolveActiveSession(tabId) {
+    return SessionActions.resolveActiveSession(this._sessionStore(), tabId);
+  }
+
+  clearSessionActions(tabId) {
+    if (SessionActions.clearActions(this._sessionStore(), tabId)) {
+      this.persistSessions();
+      Logger.log('🧹 Session actions cleared from background store');
+    }
+  }
+
+  replaceSessionActions(actions, tabId) {
+    if (SessionActions.replaceActions(this._sessionStore(), actions, tabId)) {
+      this.persistSessions();
+      Logger.log('✏️ Session actions replaced from popup:', actions?.length);
     }
   }
 
@@ -1659,18 +2075,39 @@ describe('User Flow Test', () => {
     });
 
     let result;
+    // Fresh abort controller so a "Stop Generation" click can cancel in-flight AI calls.
+    this.genAbort = new AbortController();
 
     // Try AI enhancement if enabled and configured
     if (this.settings.enableAI && this.settings.apiKey && options.useAI !== false) {
       try {
         Logger.log('🤖 ATTEMPTING LLM GENERATION - Using direct AI service...');
-        const enhancedScript = await this.callAIProvider(framework, actions, options);
-        if (enhancedScript && this.validateAIOutput(enhancedScript, framework)) {
+        let enhancedScript = stripCodeFences(await this.callAIProvider(framework, actions, options));
+        let verdict = enhancedScript
+          ? validateGeneratedScript(enhancedScript, framework, options.language, actions.length)
+          : { valid: false, reason: 'empty' };
+
+        // Auto-retry once with a corrective instruction when the first output
+        // fails syntax/structure/verbosity validation.
+        if (enhancedScript && !verdict.valid) {
+          Logger.warn(`⚠️ AI output failed validation (${verdict.reason}) — retrying once`);
+          enhancedScript = stripCodeFences(await this.callAIProvider(framework, actions, { ...options, _correction: verdict.reason }));
+          verdict = enhancedScript
+            ? validateGeneratedScript(enhancedScript, framework, options.language, actions.length)
+            : { valid: false, reason: 'empty' };
+        }
+
+        // Only fall back to template for STRUCTURAL (hard) breakage. Soft issues
+        // (verbosity, a strict JS-parse quirk on TS) already triggered the retry
+        // above but must not discard usable AI output.
+        const hardReason = enhancedScript ? hardInvalidReason(enhancedScript, framework) : 'empty';
+        if (enhancedScript && !hardReason) {
+          if (!verdict.valid) Logger.warn(`ℹ️ AI output kept despite soft issue: ${verdict.reason}`);
           Logger.log('✅ SUCCESS: Script generated using LLM (AI-Enhanced)');
           const finalScript = this.ensureInitialNavigation(enhancedScript, framework, actions);
           result = { script: finalScript, aiUsed: true };
         } else if (enhancedScript) {
-          Logger.warn('⚠️ AI output failed validation — falling back to template');
+          Logger.warn(`⚠️ AI output structurally invalid (${hardReason}) — falling back to template`);
           result = this.generateTemplateScript(framework, actions, 'validation_failed', options);
         } else {
           result = this.generateTemplateScript(framework, actions, 'not_configured', options);
@@ -1682,6 +2119,12 @@ describe('User Flow Test', () => {
     } else {
       Logger.log('⚠️ AI generation skipped - AI disabled or no API key');
       result = this.generateTemplateScript(framework, actions, 'not_configured', options);
+    }
+
+    // Append captured network-request assertion stubs (honored for BOTH the AI
+    // and template paths) when network recording is enabled and data exists.
+    if (options.includeNetworkAssertions !== false && result?.script) {
+      result.script = this.appendNetworkStubs(result.script, framework);
     }
 
     // Generate Page Object Models if requested
@@ -1698,6 +2141,7 @@ describe('User Flow Test', () => {
       }
     }
 
+    this.genAbort = null;
     return result;
   }
 
@@ -1729,7 +2173,6 @@ describe('User Flow Test', () => {
 
     let templateScript = generator.call(this, actions, options);
     Logger.log('✅ SUCCESS: Script generated using TEMPLATE (Non-AI)');
-    templateScript = this.appendNetworkStubs(templateScript, framework);
     Logger.log('🎯 Template Script Preview:', templateScript.substring(0, 200) + '...');
     return { script: templateScript, aiUsed: false, fallbackReason };
   }
@@ -1828,6 +2271,30 @@ describe('User Flow Test', () => {
     // Remove from history
     this.sessionHistory = this.sessionHistory.filter(session => session.id !== sessionId);
     await this.saveSessionHistory();
+    await this.persistSessions();
+  }
+
+  // Capture one screenshot per distinct page visited during recording, for
+  // vision-assisted script generation. Kept small (jpeg) and capped.
+  async captureNavigationScreenshot(session, url) {
+    if (!session.screenshots) session.screenshots = [];
+    if (session.screenshots.some(s => s.url === url)) return; // one per page
+    if (session.screenshots.length >= 12) return;             // cap token cost
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'jpeg', quality: 55 });
+      session.screenshots.push({ url, dataUrl });
+      this.persistSessions();
+      Logger.log('📸 Page screenshot captured for vision generation:', url);
+    } catch (e) {
+      Logger.warn('Screenshot capture failed:', e.message);
+    }
+  }
+
+  // Screenshots (data URLs) captured for the session driving the current generation.
+  getSessionScreenshots() {
+    const session = this.sessions.get(this.currentSessionId) ||
+      [...this.sessions.values()].find(s => s.screenshots?.length);
+    return (session?.screenshots || []).map(s => s.dataUrl).filter(Boolean);
   }
 
   async captureScreenshot(tabId, options = {}) {
@@ -2085,6 +2552,10 @@ describe('User Flow Test', () => {
   }
 
   optimizeActionsForScript(actions) {
+    // Pass 0: shared verbosity cleanup (keystroke collapse, nav/click dedupe,
+    // keydown/focus noise removal) — tested in action-optimizer.
+    actions = optimizeActions(actions);
+
     // Pass 1: collapse consecutive input events on the same element to final value only
     const pass1 = [];
     for (let i = 0; i < actions.length; i++) {
@@ -2785,6 +3256,7 @@ describe('User Flow Test', () => {
     this.sessions.clear();
     this.activeSessionsByTab.clear();
     this.currentSessionId = null;
+    this.persistSessions();
   }
 }
 

@@ -1,20 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "FlowScribe",
-  "version": "4.0",
-  "description": "From Navigation to Automation",
+  "name": "FlowScribe - Playwright & Selenium Recorder",
+  "version": "5.0",
+  "description": "Record browser clicks and generate Playwright, Selenium, Cypress & Puppeteer end-to-end test scripts. No code required.",
   "permissions": [
     "activeTab",
     "storage",
     "tabs",
     "scripting",
-    "webRequest"
+    "webRequest",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   },
   "content_scripts": [
     {
@@ -50,17 +54,7 @@
         "popup.css",
         "popup.js",
         "lib/*",
-        "content.js",
-        "enhanced-recorder.js",
-        "iframe-recorder.js",
-        "network-recorder.js",
-        "ai-service.js",
-        "assertion-generator.js",
-        "wait-strategy.js",
-        "settings-manager.js",
-        "input-sanitizer.js",
-        "error-handler.js",
-        "browser-api.js"
+        "iframe-recorder.js"
       ],
       "matches": [
         "<all_urls>"

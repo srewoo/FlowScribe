@@ -7,54 +7,62 @@
 }
 
 :root {
-  --primary: #0ea5e9;
-  --primary-dark: #0284c7;
-  --primary-light: #38bdf8;
-  --primary-subtle: rgba(14, 165, 233, 0.08);
-  --success: #10b981;
-  --success-dark: #059669;
-  --danger: #ef4444;
-  --warning: #f59e0b;
-  --rec: #f43f5e;
+  color-scheme: dark;
 
-  /* Surface */
-  --surface-base: #ffffff;
-  --surface-raised: #f8fafc;
-  --surface-sunken: #f1f5f9;
+  /* Accent — a calm, desaturated blue (soothing, not neon) */
+  --primary: #7aa2f7;
+  --primary-dark: #6a90e0;
+  --primary-light: #93b4ff;
+  --primary-subtle: rgba(122, 162, 247, 0.14);
+  --brand-grad: linear-gradient(135deg, #6d8fe8 0%, #7aa2f7 100%);
+  --brand-grad-hover: linear-gradient(135deg, #6484dd 0%, #6f96ee 100%);
+
+  --success: #9ece6a;
+  --success-dark: #8bbd57;
+  --success-grad: linear-gradient(135deg, #8bc46a 0%, #9ece6a 100%);
+  --danger: #f7768e;
+  --warning: #e0af68;
+  --rec: #f7768e;
+
+  /* Surfaces — deep, desaturated navy-charcoal (Tokyo-Night family) */
+  --surface-base: #1a1b26;
+  --surface-raised: #1f2130;
+  --surface-sunken: #16161e;
 
   /* Header */
-  --header-bg: #0f172a;
-  --header-text: #e2e8f0;
-  --header-muted: #64748b;
+  --header-bg: #16161e;
+  --header-text: #c0caf5;
+  --header-muted: #565f89;
 
-  /* Border */
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  /* Border — low-contrast so it doesn't glare */
+  --border: #2a2c3d;
+  --border-strong: #363a52;
 
-  /* Text */
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --text-code: #0f172a;
+  /* Text — soft off-white, easy on the eyes */
+  --text-primary: #c0caf5;
+  --text-secondary: #9aa5ce;
+  --text-muted: #656a8a;
+  --text-code: #c0caf5;
 
-  /* Grays */
-  --gray-50: #f8fafc;
-  --gray-100: #f1f5f9;
-  --gray-200: #e2e8f0;
-  --gray-300: #cbd5e1;
-  --gray-400: #94a3b8;
-  --gray-500: #64748b;
-  --gray-600: #475569;
-  --gray-700: #334155;
-  --gray-800: #1e293b;
-  --gray-900: #0f172a;
+  /* Grays — inverted ramp: low index = darker surface, high index = lighter text */
+  --gray-50: #1f2130;
+  --gray-100: #23263a;
+  --gray-200: #2a2e44;
+  --gray-300: #363b54;
+  --gray-400: #565f89;
+  --gray-500: #6f78a3;
+  --gray-600: #9aa5ce;
+  --gray-700: #b4bce0;
+  --gray-800: #c0caf5;
+  --gray-900: #cdd6fb;
   --white: #ffffff;
 
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.06);
-  --shadow: 0 1px 4px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md: 0 4px 8px rgba(0,0,0,.1), 0 2px 4px rgba(0,0,0,.06);
-  --shadow-lg: 0 8px 20px rgba(0,0,0,.1), 0 4px 8px rgba(0,0,0,.06);
-  --shadow-xl: 0 20px 40px rgba(0,0,0,.14);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
+  --shadow: 0 1px 4px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+  --shadow-md: 0 4px 10px rgba(0,0,0,.45), 0 2px 4px rgba(0,0,0,.3);
+  --shadow-lg: 0 10px 24px rgba(0,0,0,.5), 0 4px 8px rgba(0,0,0,.35);
+  --shadow-xl: 0 20px 44px rgba(0,0,0,.55);
+  --shadow-brand: 0 3px 12px rgba(122,162,247,.28);
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -65,17 +73,68 @@
   --transition: 0.15s ease;
 }
 
+/* ===== Light theme (opt-in via the header toggle) =====
+   Only surfaces/text/borders/greys flip. The header bar stays dark in both
+   themes (clean dark-top / light-body look), and the desaturated accents work
+   on both, so buttons keep dark text throughout. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --surface-base: #f6f7fb;
+  --surface-raised: #ffffff;
+  --surface-sunken: #eceff7;
+
+  --border: #e6e8f1;
+  --border-strong: #d3d7e4;
+
+  --text-primary: #1c2030;
+  --text-secondary: #4a4f66;
+  --text-muted: #858aa2;
+  --text-code: #1c2030;
+
+  --gray-50: #f6f7fb;
+  --gray-100: #eff1f8;
+  --gray-200: #e6e8f1;
+  --gray-300: #d3d7e4;
+  --gray-400: #a2a7bd;
+  --gray-500: #6f7590;
+  --gray-600: #4a4f66;
+  --gray-700: #353a52;
+  --gray-800: #242838;
+  --gray-900: #1c2030;
+
+  --shadow-sm: 0 1px 2px rgba(30,35,70,.06);
+  --shadow: 0 1px 4px rgba(30,35,70,.08), 0 1px 2px rgba(30,35,70,.04);
+  --shadow-md: 0 4px 10px rgba(30,35,70,.10), 0 2px 4px rgba(30,35,70,.06);
+  --shadow-lg: 0 10px 24px rgba(30,35,70,.12), 0 4px 8px rgba(30,35,70,.06);
+  --shadow-xl: 0 20px 44px rgba(30,35,70,.16);
+}
+
 html, body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text-primary);
   background: var(--surface-base);
-  width: 420px;
+  /* Fluid width so the same UI fills Chrome's resizable side panel while still
+     rendering at a sensible size in the popup / in-page iframe. */
+  width: 100%;
+  min-width: 320px;
+  max-width: 100%;
   min-height: 580px;
-  max-height: 600px;
   overflow-x: hidden;
 }
+
+/* API key test button + validation status */
+.api-key-status {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.api-key-status.is-valid { color: var(--success, #16a34a); }
+.api-key-status.is-invalid { color: var(--danger, #dc2626); }
+.api-key-status.is-checking { color: var(--text-secondary, #6b7280); }
+#testApiKeyBtn { white-space: nowrap; flex: 0 0 auto; }
 
 .container {
   display: flex;
@@ -94,6 +153,7 @@ html, body {
   justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .logo {
@@ -105,7 +165,8 @@ html, body {
 .logo-icon {
   width: 28px;
   height: 28px;
-  background: var(--primary);
+  background: var(--primary-subtle);
+  border: 1px solid rgba(122,162,247,.35);
   border-radius: var(--radius-md);
   display: flex;
   align-items: center;
@@ -116,7 +177,7 @@ html, body {
 .logo-icon svg {
   width: 15px;
   height: 15px;
-  color: #fff;
+  color: var(--primary-light);
 }
 
 .logo-text h1 {
@@ -348,6 +409,14 @@ html, body {
   gap: 5px;
 }
 
+/* Keep full framework names on one line and never overflow the grid cell */
+.framework-btn {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .framework-btn {
   display: flex;
   flex-direction: column;
@@ -437,12 +506,14 @@ html, body {
 
 .btn-primary {
   background: var(--primary);
-  color: white;
-  box-shadow: 0 1px 3px rgba(14,165,233,.3);
+  color: #12131c;
+  font-weight: 600;
+  box-shadow: var(--shadow-brand);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--primary-dark);
+  background: var(--primary-light);
+  box-shadow: 0 5px 16px rgba(122,162,247,.36);
 }
 
 .btn-secondary {
@@ -456,12 +527,14 @@ html, body {
 
 .btn-success {
   background: var(--success);
-  color: white;
-  box-shadow: 0 1px 3px rgba(16,185,129,.3);
+  color: #12131c;
+  font-weight: 600;
+  box-shadow: 0 3px 12px rgba(158,206,106,.26);
 }
 
 .btn-success:hover:not(:disabled) {
   background: var(--success-dark);
+  box-shadow: 0 5px 16px rgba(158,206,106,.34);
 }
 
 .btn-outline {
@@ -534,7 +607,7 @@ html, body {
 
 .action-count, .assertion-list-count {
   background: var(--primary);
-  color: white;
+  color: #12131c;
   padding: 1px 5px;
   border-radius: var(--radius-full);
   font-size: 10px;
@@ -803,8 +876,8 @@ html, body {
   justify-content: space-between;
   align-items: center;
   padding: 8px 10px;
-  background: #fef3c7;
-  border: 1px solid #f59e0b;
+  background: rgba(224,175,104,.12);
+  border: 1px solid rgba(224,175,104,.4);
   border-radius: var(--radius-md);
   margin-bottom: 12px;
 }
@@ -1008,7 +1081,7 @@ html, body {
 .assertion-type-badge {
   padding: 2px 5px;
   background: var(--success);
-  color: white;
+  color: #12131c;
   border-radius: var(--radius-sm);
   font-size: 9px;
   font-weight: 600;
@@ -1331,8 +1404,8 @@ html, body {
   gap: 7px;
   margin-top: 8px;
   padding: 8px 10px;
-  background: #fef9ec;
-  border: 1px solid #fcd34d;
+  background: rgba(224,175,104,.12);
+  border: 1px solid rgba(224,175,104,.38);
   border-radius: var(--radius-md);
   font-size: 11px;
   line-height: 1.4;
@@ -1340,12 +1413,12 @@ html, body {
 
 .ai-warning svg {
   flex-shrink: 0;
-  color: #d97706;
+  color: var(--warning);
   margin-top: 1px;
 }
 
 .ai-warning .warning-text {
-  color: #78350f;
+  color: #e0c08a;
 }
 
 .ai-config {
@@ -1371,11 +1444,11 @@ html, body {
   align-items: center;
   gap: 7px;
   padding: 7px 10px;
-  background: #fef9ec;
-  border: 1px solid #fcd34d;
+  background: rgba(224,175,104,.12);
+  border: 1px solid rgba(224,175,104,.38);
   border-radius: var(--radius-md);
   font-size: 11px;
-  color: #78350f;
+  color: #e0c08a;
   margin-bottom: 10px;
 }
 
@@ -1440,8 +1513,9 @@ html, body {
   bottom: 14px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--gray-900);
-  color: white;
+  background: #2a2e44;
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
   padding: 8px 14px;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
@@ -1456,14 +1530,17 @@ html, body {
 
 .toast.success {
   background: var(--success);
+  color: #12131c;
 }
 
 .toast.error {
   background: var(--danger);
+  color: #12131c;
 }
 
 .toast.warning {
-  background: var(--gray-800);
+  background: #2a2e44;
+  color: var(--text-primary);
   border-left: 3px solid var(--warning);
 }
 
@@ -1484,7 +1561,7 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255,255,255,.92);
+  background: rgba(18,19,28,.85);
   backdrop-filter: blur(3px);
   display: flex;
   flex-direction: column;

@@ -6,15 +6,20 @@
 const BrowserAPI = (() => {
   // Detect browser type
   const getBrowserType = () => {
-    if (typeof browser !== 'undefined' && browser.runtime) {
+    // Prefer the user agent: `typeof browser` can be truthy on Chrome (polyfill
+    // or Chrome's own alias), which would misclassify Chrome as Firefox.
+    const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    if (ua.includes('Firefox/')) {
       return 'firefox';
     }
     if (typeof chrome !== 'undefined' && chrome.runtime) {
-      // Edge also uses chrome namespace but has different user agent
-      if (navigator.userAgent.includes('Edg/')) {
+      if (ua.includes('Edg/')) {
         return 'edge';
       }
       return 'chrome';
+    }
+    if (typeof browser !== 'undefined' && browser.runtime) {
+      return 'firefox';
     }
     return 'unknown';
   };

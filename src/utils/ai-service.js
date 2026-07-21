@@ -1,3 +1,7 @@
+const DEBUG_MODE = false;
+const aiLog = (...args) => { if (DEBUG_MODE) console.log(...args); };
+const aiWarn = (...args) => { if (DEBUG_MODE) console.warn(...args); };
+
 class AIService {
   constructor(skipAutoLoad = false) {
     this.providers = {
@@ -9,9 +13,9 @@ class AIService {
       },
       anthropic: {
         name: 'Anthropic',
-        models: ['claude-sonnet-4-5-20250514', 'claude-haiku-4-5-20251001'],
+        models: ['claude-sonnet-4-5', 'claude-haiku-4-5'],
         endpoint: 'https://api.anthropic.com/v1/messages',
-        defaultModel: 'claude-sonnet-4-5-20250514'
+        defaultModel: 'claude-sonnet-4-5'
       },
       google: {
         name: 'Google AI',
@@ -40,7 +44,7 @@ class AIService {
     try {
       // Service worker availability check
       if (!chrome?.storage?.local) {
-        console.warn('Chrome storage API not available in current context');
+        aiWarn('Chrome storage API not available in current context');
         throw new Error('Chrome storage API not available');
       }
 
@@ -60,7 +64,7 @@ class AIService {
       // Validate model for the selected provider
       this.validateModelForProvider();
 
-      console.log('🤖 AI settings loaded successfully:', {
+      aiLog('🤖 AI settings loaded successfully:', {
         provider: this.settings.provider,
         model: this.settings.model,
         enableAI: this.settings.enableAI,
@@ -83,7 +87,7 @@ class AIService {
   validateModelForProvider() {
     const provider = this.providers[this.settings.provider];
     if (provider && provider.models && !provider.models.includes(this.settings.model)) {
-      console.warn(`⚠️ Model '${this.settings.model}' not valid for provider '${this.settings.provider}', using default '${provider.defaultModel}'`);
+      aiWarn(`⚠️ Model '${this.settings.model}' not valid for provider '${this.settings.provider}', using default '${provider.defaultModel}'`);
       this.settings.model = provider.defaultModel;
     }
   }
@@ -102,7 +106,7 @@ class AIService {
       apiKey: newSettings.apiKey || this.settings.apiKey,
       enableAI: newSettings.enableAI !== undefined ? newSettings.enableAI : this.settings.enableAI
     };
-    console.log('🤖 AI Service settings updated:', this.settings);
+    aiLog('🤖 AI Service settings updated:', this.settings);
   }
 
   isConfigured() {
@@ -149,7 +153,7 @@ class AIService {
   }
 
   async enhanceScript(actions, framework, options = {}) {
-    console.log('🤖 LLM ENHANCEMENT STARTED:', {
+    aiLog('🤖 LLM ENHANCEMENT STARTED:', {
       provider: this.settings.provider,
       model: this.settings.model,
       framework,
@@ -159,13 +163,13 @@ class AIService {
     });
 
     if (!this.isConfigured()) {
-      console.log('❌ AI not configured, using template mode');
+      aiLog('❌ AI not configured, using template mode');
       return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'not_configured' };
     }
 
     try {
       const prompt = this.buildEnhancementPrompt(actions, framework, options);
-      console.log('📝 Sending prompt to LLM with action data...');
+      aiLog('📝 Sending prompt to LLM with action data...');
       const response = await this.callAIProvider(prompt);
 
       if (response && response.enhancedScript) {
@@ -173,10 +177,10 @@ class AIService {
         if (this.validateAIOutput(cleaned, framework)) {
           return cleaned;
         }
-        console.warn('❌ AI output failed validation, falling back to template');
+        aiWarn('❌ AI output failed validation, falling back to template');
         return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'validation_failed' };
       } else {
-        console.warn('❌ AI response invalid, falling back to template');
+        aiWarn('❌ AI response invalid, falling back to template');
         return { script: this.generateTemplateScript(actions, framework), aiUsed: false, fallbackReason: 'empty_response' };
       }
     } catch (error) {
@@ -457,7 +461,7 @@ ACTION ${index + 1} (${action.type}):
     let modelToUse = this.settings.model;
 
     if (!validModels.includes(modelToUse)) {
-      console.warn(`⚠️ Invalid OpenAI model '${modelToUse}', falling back to '${provider.defaultModel}'`);
+      aiWarn(`⚠️ Invalid OpenAI model '${modelToUse}', falling back to '${provider.defaultModel}'`);
       modelToUse = provider.defaultModel;
     }
 
@@ -467,12 +471,12 @@ ACTION ${index + 1} (${action.type}):
     let userPrompt = prompt.userPrompt || '';
 
     if (systemPrompt.length > maxPromptLength) {
-      console.warn(`⚠️ System prompt too long (${systemPrompt.length} chars), truncating to ${maxPromptLength}`);
+      aiWarn(`⚠️ System prompt too long (${systemPrompt.length} chars), truncating to ${maxPromptLength}`);
       systemPrompt = systemPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
     }
 
     if (userPrompt.length > maxPromptLength) {
-      console.warn(`⚠️ User prompt too long (${userPrompt.length} chars), truncating to ${maxPromptLength}`);
+      aiWarn(`⚠️ User prompt too long (${userPrompt.length} chars), truncating to ${maxPromptLength}`);
       userPrompt = userPrompt.substring(0, maxPromptLength) + '\n\n[Content truncated due to length]';
     }
 
@@ -486,7 +490,7 @@ ACTION ${index + 1} (${action.type}):
       temperature: this.settings.temperature
     };
 
-    console.log('🔧 OpenAI API Request:', {
+    aiLog('🔧 OpenAI API Request:', {
       endpoint: provider.endpoint,
       model: modelToUse,
       messageCount: requestBody.messages.length,
@@ -528,7 +532,8 @@ ACTION ${index + 1} (${action.type}):
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.settings.apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
         model: this.settings.model,
@@ -589,7 +594,7 @@ ACTION ${index + 1} (${action.type}):
   }
 
   generateTemplateScript(actions, framework) {
-    console.log('📝 TEMPLATE GENERATION STARTED (Non-AI):', {
+    aiLog('📝 TEMPLATE GENERATION STARTED (Non-AI):', {
       framework,
       actionCount: actions?.length || 0,
       reason: 'AI disabled or fallback mode'
@@ -608,15 +613,15 @@ ACTION ${index + 1} (${action.type}):
     }
 
     const templateScript = generator.call(this, actions);
-    console.log('✅ TEMPLATE GENERATION COMPLETED (Non-AI)');
-    console.log('📏 Template script length:', templateScript?.length || 0, 'characters');
+    aiLog('✅ TEMPLATE GENERATION COMPLETED (Non-AI)');
+    aiLog('📏 Template script length:', templateScript?.length || 0, 'characters');
 
     return templateScript;
   }
 
   generatePlaywrightTemplate(actions) {
     if (!actions || !Array.isArray(actions)) {
-      console.warn('generatePlaywrightTemplate: actions is not a valid array');
+      aiWarn('generatePlaywrightTemplate: actions is not a valid array');
       actions = [];
     }
 
@@ -725,7 +730,7 @@ ACTION ${index + 1} (${action.type}):
 
   generateSeleniumTemplate(actions) {
     if (!actions || !Array.isArray(actions)) {
-      console.warn('generateSeleniumTemplate: actions is not a valid array');
+      aiWarn('generateSeleniumTemplate: actions is not a valid array');
       actions = [];
     }
 
@@ -814,7 +819,7 @@ ACTION ${index + 1} (${action.type}):
 
   generateCypressTemplate(actions) {
     if (!actions || !Array.isArray(actions)) {
-      console.warn('generateCypressTemplate: actions is not a valid array');
+      aiWarn('generateCypressTemplate: actions is not a valid array');
       actions = [];
     }
 
@@ -889,7 +894,7 @@ ACTION ${index + 1} (${action.type}):
 
   generatePuppeteerTemplate(actions) {
     if (!actions || !Array.isArray(actions)) {
-      console.warn('generatePuppeteerTemplate: actions is not a valid array');
+      aiWarn('generatePuppeteerTemplate: actions is not a valid array');
       actions = [];
     }
 
